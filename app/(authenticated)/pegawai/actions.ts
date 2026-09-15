@@ -43,7 +43,7 @@ export async function getPegawaiWithUnits(
       query = query.eq('unit_id', user.user_metadata.unit_id)
     }
 
-    query = query.order('created_at', { ascending: false })
+    query = query.order('employee_code', { ascending: false })
 
     // Apply search filter
     if (searchTerm) {

@@ -22,7 +22,7 @@ export async function getPegawai(
         is_active, created_at, updated_at, 
         m_units(id, name, code)
       `, { count: 'exact' })
-      .order('created_at', { ascending: false })
+      .order('employee_code', { ascending: false })
 
     // Apply search filter
     if (searchTerm) {
