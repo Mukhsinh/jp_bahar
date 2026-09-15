@@ -318,15 +318,17 @@ export default function KPIConfigPage() {
     setIsCopyDialogOpen(false)
   }, [loadKPIStructure])
 
-  const handleDownloadGuide = useCallback(() => {
-    const url = selectedUnit ? `/api/kpi-config/guide?unitId=${selectedUnit}` : '/api/kpi-config/guide'
+  const handleDownloadGuide = useCallback((revType?: string) => {
+    const selectedRev = revType || activeRevenueType
+    const revenueParam = `revenueType=${selectedRev}`
+    const url = selectedUnit ? `/api/kpi-config/guide?unitId=${selectedUnit}&${revenueParam}` : `/api/kpi-config/guide?${revenueParam}`
     window.open(url, '_blank')
-  }, [selectedUnit])
+  }, [selectedUnit, activeRevenueType])
 
   const handleDownloadReport = useCallback((format: 'excel' | 'pdf') => {
     if (!selectedUnit) return
-    window.open(`/api/kpi-config/export?unitId=${selectedUnit}&format=${format}`, '_blank')
-  }, [selectedUnit])
+    window.open(`/api/kpi-config/export?unitId=${selectedUnit}&format=${format}&revenueType=${activeRevenueType}`, '_blank')
+  }, [selectedUnit, activeRevenueType])
 
   if (!mounted || (isLoading && units.length === 0)) {
     return (
@@ -365,13 +367,25 @@ export default function KPIConfigPage() {
           <p className="text-gray-600 mt-1">Konfigurasi kategori, indikator, dan sub indikator KPI untuk setiap unit</p>
         </div>
         <div className="flex gap-2">
-          <Button
-            onClick={handleDownloadGuide}
-            className="bg-purple-500 hover:bg-purple-600 text-white shadow-md hover:shadow-lg transition-all"
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Petunjuk PDF
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button className="bg-purple-600 hover:bg-purple-700 text-white shadow-md hover:shadow-lg transition-all">
+                <Download className="h-4 w-4 mr-2" />
+                Petunjuk PDF
+                <ChevronDown className="h-4 w-4 ml-2" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={() => handleDownloadGuide('bpjs')} className="cursor-pointer">
+                <FileText className="h-4 w-4 mr-2 text-blue-600" />
+                Versi BPJS Kesehatan
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleDownloadGuide('umum')} className="cursor-pointer">
+                <FileText className="h-4 w-4 mr-2 text-emerald-600" />
+                Versi Pendapatan UMUM
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {selectedUnit && (
             <DropdownMenu>
