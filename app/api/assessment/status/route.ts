@@ -14,72 +14,62 @@ interface AssessmentStatus {
   role?: string
 }
 
-async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, period: string): Promise<AssessmentStatus[]> {
-  let query = supabase
-    .from('v_assessment_status')
-    .select('*')
-    .eq('period', period)
+async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, period: string, revenueType: string = 'bpjs'): Promise<AssessmentStatus[]> {
+  let result: AssessmentStatus[] = []
+
+  let empQuery = supabase
+    .from('m_employees')
+    .select(`
+      id,
+      full_name,
+      unit_id,
+      role,
+      m_units!inner (
+        name,
+        code
+      )
+    `)
+    .eq('is_active', true)
+    .neq('role', 'superadmin')
 
   if (unitIdFilter && unitIdFilter !== '0') {
-    query = query.eq('unit_id', unitIdFilter)
+    empQuery = empQuery.eq('unit_id', unitIdFilter)
   }
 
-  const { data, error } = await query.order('full_name').range(0, 9999)
+  const { data: directEmps } = await empQuery.order('full_name')
 
-  let result: AssessmentStatus[] = (data || []).filter((emp: any) =>
-    emp.unit_code !== 'ADMIN' &&
-    emp.unit_name !== 'SUPERADMIN' &&
-    emp.role !== 'superadmin'
-  )
-
-  // Fallback if view returns no rows
-  if (result.length === 0) {
-    let empQuery = supabase
-      .from('m_employees')
-      .select(`
-        id,
-        full_name,
-        unit_id,
-        role,
-        m_units!inner (
-          name
-        )
-      `)
+  if (directEmps && directEmps.length > 0) {
+    const { data: indicators } = await supabase
+      .from('m_kpi_indicators')
+      .select('id, m_kpi_categories!inner(unit_id)')
       .eq('is_active', true)
-      .neq('role', 'superadmin')
 
-    if (unitIdFilter && unitIdFilter !== '0') {
-      empQuery = empQuery.eq('unit_id', unitIdFilter)
-    }
+    const indicatorCountMap: Record<string, number> = {}
+    indicators?.forEach((ind: any) => {
+      const uId = ind.m_kpi_categories?.unit_id
+      if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
+    })
 
-    const { data: directEmps } = await empQuery.order('full_name')
+    const { data: existingAssessments } = await supabase
+      .from('t_kpi_assessments')
+      .select('employee_id, indicator_id')
+      .eq('period', period)
+      .eq('revenue_type', revenueType)
 
-    if (directEmps && directEmps.length > 0) {
-      const { data: indicators } = await supabase
-        .from('m_kpi_indicators')
-        .select('id, m_kpi_categories!inner(unit_id)')
-        .eq('is_active', true)
+    const assessedCountMap: Record<string, Set<string>> = {}
+    existingAssessments?.forEach((ass: any) => {
+      if (!assessedCountMap[ass.employee_id]) {
+        assessedCountMap[ass.employee_id] = new Set()
+      }
+      assessedCountMap[ass.employee_id].add(ass.indicator_id)
+    })
 
-      const indicatorCountMap: Record<string, number> = {}
-      indicators?.forEach((ind: any) => {
-        const uId = ind.m_kpi_categories?.unit_id
-        if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
-      })
-
-      const { data: existingAssessments } = await supabase
-        .from('t_kpi_assessments')
-        .select('employee_id, indicator_id')
-        .eq('period', period)
-
-      const assessedCountMap: Record<string, Set<string>> = {}
-      existingAssessments?.forEach((ass: any) => {
-        if (!assessedCountMap[ass.employee_id]) {
-          assessedCountMap[ass.employee_id] = new Set()
-        }
-        assessedCountMap[ass.employee_id].add(ass.indicator_id)
-      })
-
-      result = directEmps.map((emp: any) => {
+    result = directEmps
+      .filter((emp: any) =>
+        (emp.m_units as any)?.code !== 'ADMIN' &&
+        (emp.m_units as any)?.name !== 'SUPERADMIN'
+      )
+      .map((emp: any) => {
         const totalInd = indicatorCountMap[emp.unit_id] || 0
         const assessedInd = assessedCountMap[emp.id]?.size || 0
         let empStatus = 'Belum Dinilai'
@@ -101,7 +91,6 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
           role: emp.role
         }
       })
-    }
   }
 
   return result
@@ -158,6 +147,7 @@ export async function GET(request: NextRequest) {
     const employeeId = searchParams.get('employee_id')
     const period = searchParams.get('period')
     const requestedUnitId = searchParams.get('unit_id')
+    const revenueType = searchParams.get('revenue_type') || 'bpjs'
 
     if (!period) {
       return NextResponse.json({ error: 'Period is required' }, { status: 400 })
@@ -181,7 +171,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Get status for specific employee
-      const statuses = await getAssessmentStatus(fetchClient, effectiveRole === 'unit_manager' ? effectiveUnitId : null, period)
+      const statuses = await getAssessmentStatus(fetchClient, effectiveRole === 'unit_manager' ? effectiveUnitId : null, period, revenueType)
       const employeeStatus = statuses.find(s => s.employee_id === employeeId)
 
       if (!employeeStatus) {
@@ -197,7 +187,7 @@ export async function GET(request: NextRequest) {
         unitIdFilter = requestedUnitId
       }
 
-      const statuses = await getAssessmentStatus(fetchClient, unitIdFilter, period)
+      const statuses = await getAssessmentStatus(fetchClient, unitIdFilter, period, revenueType)
 
       // Calculate summary statistics
       const summary = {

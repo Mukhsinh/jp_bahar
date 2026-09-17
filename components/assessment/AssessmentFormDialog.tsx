@@ -599,93 +599,141 @@ export default function AssessmentFormDialog({
         )}
 
         {/* Real-time Recapitulation & Progress */}
-        {!loading && categories.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-2">
-            <Card className="bg-blue-50/50 border-blue-100">
-              <CardHeader className="py-3 px-4">
-                <CardTitle className="text-xs font-semibold text-blue-700 uppercase tracking-wider flex items-center gap-1">
-                  <CheckCircle2 className="h-3 w-3" />
-                  Progress Pengisian
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="py-0 px-4 pb-3">
-                {(() => {
-                  const totalInd = categories.flatMap(c => c.indicators).length
-                  const filledInd = Object.keys(assessments).length
-                  const pct = totalInd > 0 ? (filledInd / totalInd) * 100 : 0
-                  return (
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-sm font-bold">
-                        <span>{filledInd} / {totalInd}</span>
-                        <span>{Math.round(pct)}%</span>
-                      </div>
-                      <Progress value={pct} className="h-2" />
-                    </div>
-                  )
-                })()}
-              </CardContent>
-            </Card>
+        {!loading && categories.length > 0 && (() => {
+          const totalInd = categories.flatMap(c => c.indicators).length
+          const filledInd = Object.keys(assessments).length
+          const pct = totalInd > 0 ? (filledInd / totalInd) * 100 : 0
 
-            {['P1', 'P2', 'P3'].map((catCode) => {
-              const category = categories.find(c => c.category === catCode)
-              if (!category) return null
+          let totalSkorIndeks = 0;
+          let totalSkorPrioritas = 0;
 
-              let totalRealisasiKategori = 0
-              let totalTargetKategori = 0
+          categories.forEach(category => {
+            category.indicators.forEach(indicator => {
+              const assessment = assessments[indicator.id]
+              const isPriority = indicator.calculation_method === 'priority'
+              const isActivity = category.configuration_style === 'activity'
 
-              category.indicators.forEach(indicator => {
-                const assessment = assessments[indicator.id]
-                const indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
-                const indTarget = getIndicatorTarget(indicator)
-                const indRealisasi = assessment ? assessment.realization_value : 0
-                const indScore = assessment ? assessment.score : 0
-                const isPriority = indicator.calculation_method === 'priority'
+              if (isPriority) {
+                totalSkorPrioritas += assessment ? assessment.realization_value : 0;
+              } else if (isActivity) {
+                totalSkorPrioritas += assessment ? assessment.score : 0;
+              }
+            })
+          })
 
-                if (!isPriority) {
-                  if (category.is_weighted !== false) {
-                    totalRealisasiKategori += (indRealisasi * (indWeight / 100))
-                    totalTargetKategori += (indTarget * (indWeight / 100))
-                  } else {
-                    // Unweighted category: sum indicators as raw achievement vs 100
-                    const ach = indTarget > 0 ? (indRealisasi / indTarget) * 100 : 0
-                    totalRealisasiKategori += ach
-                    totalTargetKategori += 100
-                  }
-                }
-              })
+          const pCards = ['P1', 'P2', 'P3'].map((catCode) => {
+            const category = categories.find(c => c.category === catCode)
+            if (!category) return null
 
-              const porsiKategori = category.weight_percentage
-              let kontribusiAkhir = 0
-              if (totalTargetKategori > 0) {
+            let totalRealisasiKategori = 0
+            let totalTargetKategori = 0
+
+            category.indicators.forEach(indicator => {
+              const assessment = assessments[indicator.id]
+              const indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
+              const indTarget = getIndicatorTarget(indicator)
+              const indRealisasi = assessment ? assessment.realization_value : 0
+              const isPriority = indicator.calculation_method === 'priority'
+
+              if (!isPriority) {
                 if (category.is_weighted !== false) {
-                  kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * porsiKategori
+                  totalRealisasiKategori += (indRealisasi * (indWeight / 100))
+                  totalTargetKategori += (indTarget * (indWeight / 100))
                 } else {
-                  // For unweighted, the "contribution" is just the average achievement percentage
-                  kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * 100
+                  // Unweighted category: sum indicators as raw achievement vs 100
+                  const ach = indTarget > 0 ? (indRealisasi / indTarget) * 100 : 0
+                  totalRealisasiKategori += ach
+                  totalTargetKategori += 100
                 }
               }
+            })
 
-              return (
-                <Card key={catCode} className="border-gray-200">
-                  <CardHeader className="py-3 px-4 flex flex-row items-center justify-between space-y-0">
-                    <CardTitle className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                      Total {catCode} ({porsiKategori}%)
-                    </CardTitle>
-                    <Badge variant="secondary" className="text-[10px] font-medium px-2 py-0 border-blue-200 bg-blue-50 text-blue-700">
-                      Poin Akhir: {isMedicalUnit ? totalRealisasiKategori.toFixed(2) : kontribusiAkhir.toFixed(2)}
-                    </Badge>
-                  </CardHeader>
-                  <CardContent className="py-0 px-4 pb-3">
-                    <div className="text-xl font-bold text-gray-900 flex items-end">
-                      {totalRealisasiKategori.toFixed(2)}
-                      <span className="text-sm font-medium text-gray-500 ml-1 mb-0.5">/ {totalTargetKategori.toFixed(2)}</span>
+            const porsiKategori = category.weight_percentage
+            let kontribusiAkhir = 0
+            if (totalTargetKategori > 0) {
+              if (category.is_weighted !== false) {
+                kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * porsiKategori
+              } else {
+                // For unweighted, the "contribution" is just the average achievement percentage
+                kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * 100
+              }
+            }
+
+            const poinAkhir = isMedicalUnit || totalTargetKategori === 0 ? totalRealisasiKategori : kontribusiAkhir;
+            totalSkorIndeks += poinAkhir;
+
+            return (
+              <Card key={catCode} className="border-gray-200">
+                <CardHeader className="py-2 px-3 flex flex-row items-center justify-between space-y-0">
+                  <CardTitle className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Total {catCode} ({porsiKategori}%)
+                  </CardTitle>
+                  <Badge variant="secondary" className="text-[10px] font-medium px-1.5 py-0 border-blue-200 bg-blue-50 text-blue-700">
+                    {poinAkhir.toFixed(2)}
+                  </Badge>
+                </CardHeader>
+                <CardContent className="py-0 px-3 pb-2">
+                  <div className="text-base font-bold text-gray-900 flex items-end">
+                    {totalRealisasiKategori.toFixed(2)}
+                    <span className="text-xs font-medium text-gray-500 ml-1 mb-[1px]">/ {totalTargetKategori.toFixed(2)}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })
+
+          return (
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
+              <Card className="bg-blue-50/50 border-blue-100">
+                <CardHeader className="py-2 px-3">
+                  <CardTitle className="text-[10px] font-semibold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Progress
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-0 px-3 pb-2">
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs font-bold">
+                      <span>{filledInd} / {totalInd}</span>
+                      <span>{Math.round(pct)}%</span>
                     </div>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-        )}
+                    <Progress value={pct} className="h-1.5" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {pCards}
+
+              <Card className="bg-emerald-50 border-emerald-200">
+                <CardHeader className="py-2 px-3">
+                  <CardTitle className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
+                    <Target className="h-3 w-3" />
+                    Total Skor (Indeks)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-0 px-3 pb-2">
+                  <div className="text-lg font-bold text-emerald-700">
+                    {totalSkorIndeks.toFixed(2)}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-purple-50 border-purple-200">
+                <CardHeader className="py-2 px-3">
+                  <CardTitle className="text-[10px] font-semibold text-purple-700 uppercase tracking-wider flex items-center gap-1">
+                    <TrendingUp className="h-3 w-3" />
+                    Priority (Kuant.)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="py-0 px-3 pb-2">
+                  <div className="text-lg font-bold text-purple-700">
+                    {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(totalSkorPrioritas)}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )
+        })()}
 
         <div className="space-y-6">
           {loading ? (
