@@ -8,10 +8,11 @@ interface ExportData {
   fileName?: string
 }
 
-interface ReportExportOptions {
+export interface ReportExportOptions {
   reportType: string
   period: string
   data: any[]
+  revenueType?: string
 }
 
 /**
@@ -33,12 +34,13 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
     case 'employee-slip':
       sheetName = reportType === 'incentive' ? 'Incentive Report' : 'Employee Slip'
       wsData = [
-        ['NIP/NIK', 'NIK', 'Nama Pegawai', 'Unit', 'Status Pegawai', 'Golongan', 'Nama Bank', 'No. Rekening', 'Nama Pemilik Rek', 'Status Pajak', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas (Rp)', 'PIR', 'Insentif Bruto', 'Pajak', 'Keterangan Pajak', 'Insentif Netto'],
+        ['NIP/NIK', 'NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'Status Pegawai', 'Golongan', 'Nama Bank', 'No. Rekening', 'Nama Pemilik Rek', 'Status Pajak', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas (Rp)', 'PIR', 'Insentif Bruto', 'Pajak', 'Keterangan Pajak', 'Insentif Netto'],
         ...data.map((row: any) => [
           row.employee_code || '-',
           row.nik || '-',
           row.employee_name,
           row.unit || '-',
+          row.unit_proportion ? `${Number(row.unit_proportion).toFixed(2)}%` : '-',
           row.employee_status || '-',
           row.pns_grade || '-',
           row.bank_name || '-',
@@ -212,6 +214,7 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
     { wch: 20 }, // NIK
     { wch: 30 }, // Nama Pegawai
     { wch: 25 }, // Unit
+    { wch: 15 }, // Proporsi Unit
     { wch: 15 }, // Status
     { wch: 12 }, // Golongan
     { wch: 15 }, // Bank

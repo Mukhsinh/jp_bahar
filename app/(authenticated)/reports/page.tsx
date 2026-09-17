@@ -115,12 +115,12 @@ function IncentiveTable({ data }: { data: any[] }) {
     return <div>Data must be an array, but received: {typeof data}</div>;
   }
   const headers = [
-    'NIP/NIK', 'NAMA PEGAWAI', 'UNIT',
+    'NIP/NIK', 'NAMA PEGAWAI', 'UNIT', 'PROPORSI UNIT',
     'P1', 'P2', 'P3', 'TOTAL INDEKS',
     'INSENTIF PRIORITAS', 'PIR', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
   ]
   const rightAligned = [
-    'P1', 'P2', 'P3', 'TOTAL INDEKS',
+    'PROPORSI UNIT', 'P1', 'P2', 'P3', 'TOTAL INDEKS',
     'INSENTIF PRIORITAS', 'PIR', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
   ]
 
@@ -140,6 +140,7 @@ function IncentiveTable({ data }: { data: any[] }) {
               <td className="border p-2 whitespace-nowrap">{safeRender(row.employee_code || '-')}</td>
               <td className="border p-2 font-medium min-w-[150px]">{safeRender(row.employee_name)}</td>
               <td className="border p-2 whitespace-nowrap">{safeRender(row.unit)}</td>
+              <td className="border p-2 text-right font-mono text-gray-700">{row.unit_proportion ? `${Number(row.unit_proportion).toFixed(2)}%` : '-'}</td>
               <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p1_score) || 0, 2)}</td>
               <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p2_score) || 0, 2)}</td>
               <td className="border p-2 text-right font-mono text-gray-700">{formatNumber(Number(row.p3_score) || 0, 2)}</td>
@@ -274,7 +275,7 @@ export default function ReportsPage() {
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [selectedUnit, setSelectedUnit] = useState('all')
   const [selectedEmployee, setSelectedEmployee] = useState('all')
-  const [selectedRevenueType, setSelectedRevenueType] = useState<'all' | 'bpjs' | 'umum'>('all')
+  const [selectedRevenueType, setSelectedRevenueType] = useState<'all' | 'bpjs' | 'umum'>('bpjs')
   const [detailLevel, setDetailLevel] = useState<'summary' | 'detail'>('summary')
   const [isGenerating, setIsGenerating] = useState(false)
   const [generationProgress, setGenerationProgress] = useState(0)
@@ -416,7 +417,7 @@ export default function ReportsPage() {
       const response = await fetch('/api/reports/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportType: selectedReport, period: selectedPeriod, format, data: reportData }),
+        body: JSON.stringify({ reportType: selectedReport, period: selectedPeriod, format, data: reportData, revenueType: selectedRevenueType }),
       })
       if (!response.ok) throw new Error('Ekspor gagal')
       const blob = await response.blob()
@@ -551,9 +552,9 @@ export default function ReportsPage() {
                     <SelectValue placeholder="Pilih Jenis Pendapatan" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Konsolidasi (Gabungan BPJS &amp; UMUM)</SelectItem>
                     <SelectItem value="bpjs">BPJS Kesehatan Only</SelectItem>
                     <SelectItem value="umum">Pendapatan UMUM Only</SelectItem>
+                    <SelectItem value="all">Konsolidasi (Gabungan BPJS &amp; UMUM)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

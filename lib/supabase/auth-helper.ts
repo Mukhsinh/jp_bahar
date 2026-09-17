@@ -41,7 +41,16 @@ function extractTokenFromCookies(cookieHeader?: string | null, cookieStoreAll?: 
             } catch (e) {
                 // fallback
             }
+        } else if (!str.includes('.') && (str.startsWith('eyJ') || str.startsWith('W3'))) {
+            // Base64 encoded JSON array or object (eyJ = {" , W3 = [)
+            try {
+                const decoded = Buffer.from(str, 'base64').toString('utf8')
+                if (decoded.startsWith('{') || decoded.startsWith('[')) {
+                    str = decoded
+                }
+            } catch (e) { }
         }
+
         if (str.startsWith('{') || str.startsWith('[')) {
             try {
                 const parsed = JSON.parse(str)

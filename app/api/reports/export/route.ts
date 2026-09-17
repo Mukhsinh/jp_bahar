@@ -8,7 +8,7 @@ import { exportToPDF } from '@/lib/export/pdf-export'
  */
 export async function POST(request: NextRequest) {
   try {
-    const { reportType, period, format, data } = await request.json()
+    const { reportType, period, format, data, revenueType } = await request.json()
 
     if (!reportType || !period || !format || !data) {
       return NextResponse.json(
@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
         reportType,
         period,
         data,
+        revenueType,
       })
       contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       filename = `${reportType}-${period}.xlsx`
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
         reportType,
         period,
         data,
+        revenueType,
       })
       contentType = 'application/pdf'
       filename = `${reportType}-${period}.pdf`

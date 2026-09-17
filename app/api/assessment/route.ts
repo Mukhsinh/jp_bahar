@@ -107,7 +107,7 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
   // Look up existing assessment ID for this exact revenue_type if ID not provided
   let existingId = assessment.id
   if (!existingId) {
-    const { data: existingRow } = await adminClient
+    const { data: existingRows } = await adminClient
       .from('t_kpi_assessments')
       .select('id')
       .eq('employee_id', assessment.employee_id)
@@ -115,13 +115,16 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
       .eq('period', assessment.period)
       .eq('revenue_type', revType)
       .is('sub_indicator_id', null)
-      .maybeSingle()
-    if (existingRow?.id) {
-      existingId = existingRow.id
+      .limit(1)
+
+    if (existingRows && existingRows.length > 0) {
+      existingId = existingRows[0].id
     }
   }
 
   // 1. Prepare Main Assessment Data
+  // Note: achievement_percentage and score are GENERATED ALWAYS columns in PostgreSQL, so we omit them
+  // to allow Postgres to generate them automatically without throwing non-DEFAULT column errors.
   const assessmentData: any = {
     employee_id: assessment.employee_id,
     indicator_id: assessment.indicator_id,
@@ -130,39 +133,56 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
     realization_value: assessment.realization_value,
     target_value: assessment.target_value,
     weight_percentage: assessment.weight_percentage,
-    achievement_percentage: achievement,
-    score: score,
     notes: assessment.notes,
     assessor_id: assessment.assessor_id,
     revenue_type: revType,
     updated_at: new Date().toISOString()
   }
 
+  let savedData: any = null
+
+  // 2. Update existing assessment or insert new assessment using explicit ID matching
   if (existingId) {
-    assessmentData.id = existingId
-  }
+    const { data, error: updateError } = await adminClient
+      .from('t_kpi_assessments')
+      .update(assessmentData)
+      .eq('id', existingId)
+      .select()
+      .single()
 
-  // 2. Upsert the main indicator assessment
-  const { data: savedData, error: upsertError } = await adminClient
-    .from('t_kpi_assessments')
-    .upsert(assessmentData, {
-      onConflict: existingId ? 'id' : 'employee_id,indicator_id,period,sub_indicator_id,revenue_type'
-    })
-    .select()
-    .single()
+    if (updateError) {
+      console.error('Main assessment update error:', updateError)
+      throw new Error(`Failed to save assessment: ${updateError.message}`)
+    }
+    savedData = data
+  } else {
+    const { data, error: insertError } = await adminClient
+      .from('t_kpi_assessments')
+      .insert(assessmentData)
+      .select()
+      .single()
 
-  if (upsertError) {
-    console.error('Main assessment upsert error:', upsertError)
-    throw new Error(`Failed to save assessment: ${upsertError.message}`)
+    if (insertError) {
+      console.error('Main assessment insert error:', insertError)
+      throw new Error(`Failed to save assessment: ${insertError.message}`)
+    }
+    savedData = data
   }
 
   // 3. Handle Sub-Assessments if provided
   if (assessment.sub_assessments && Array.isArray(assessment.sub_assessments)) {
-    const subAssessmentsToUpsert = []
+    let aggregateScore = 0
+    let aggregateRealization = 0
+
     for (const sub of assessment.sub_assessments) {
+      const subScore = sub.score || 0
+      const subRealization = sub.realization_value || 0
+      aggregateScore += subScore
+      aggregateRealization += subRealization
+
       let subExistingId = sub.id
       if (!subExistingId) {
-        const { data: existingSubRow } = await adminClient
+        const { data: existingSubRows } = await adminClient
           .from('t_kpi_assessments')
           .select('id')
           .eq('employee_id', assessment.employee_id)
@@ -170,9 +190,10 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
           .eq('sub_indicator_id', sub.sub_indicator_id)
           .eq('period', assessment.period)
           .eq('revenue_type', revType)
-          .maybeSingle()
-        if (existingSubRow?.id) {
-          subExistingId = existingSubRow.id
+          .limit(1)
+
+        if (existingSubRows && existingSubRows.length > 0) {
+          subExistingId = existingSubRows[0].id
         }
       }
 
@@ -181,10 +202,9 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
         indicator_id: assessment.indicator_id,
         sub_indicator_id: sub.sub_indicator_id,
         period: assessment.period,
-        realization_value: sub.realization_value || 0,
+        realization_value: subRealization,
         target_value: 0,
         weight_percentage: 0,
-        score: sub.score || 0,
         notes: sub.notes || '',
         assessor_id: assessment.assessor_id,
         revenue_type: revType,
@@ -192,31 +212,32 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
       }
 
       if (subExistingId) {
-        subData.id = subExistingId
+        const { error: subUpdateError } = await adminClient
+          .from('t_kpi_assessments')
+          .update(subData)
+          .eq('id', subExistingId)
+
+        if (subUpdateError) {
+          console.error('Sub-assessment update error:', subUpdateError)
+          throw new Error(`Failed to save sub-indicators: ${subUpdateError.message}`)
+        }
+      } else {
+        const { error: subInsertError } = await adminClient
+          .from('t_kpi_assessments')
+          .insert(subData)
+
+        if (subInsertError) {
+          console.error('Sub-assessment insert error:', subInsertError)
+          throw new Error(`Failed to save sub-indicators: ${subInsertError.message}`)
+        }
       }
-      subAssessmentsToUpsert.push(subData)
     }
 
-    if (subAssessmentsToUpsert.length > 0) {
-      const { error: subUpsertError } = await adminClient
-        .from('t_kpi_assessments')
-        .upsert(subAssessmentsToUpsert, {
-          onConflict: 'employee_id,indicator_id,period,sub_indicator_id,revenue_type'
-        })
-
-      if (subUpsertError) {
-        console.error('Sub-assessments upsert error:', subUpsertError)
-        throw new Error(`Failed to save sub-indicators: ${subUpsertError.message}`)
-      }
-
-      // 4. Sync main row score = sum of sub-assessment scores
-      const aggregateScore = subAssessmentsToUpsert.reduce((sum, s) => sum + (s.score || 0), 0)
-      const aggregateRealization = subAssessmentsToUpsert.reduce((sum, s) => sum + (s.realization_value || 0), 0)
-
+    if (assessment.sub_assessments.length > 0) {
+      // 4. Sync main row realization value
       const { error: syncError } = await adminClient
         .from('t_kpi_assessments')
         .update({
-          score: aggregateScore,
           realization_value: aggregateRealization,
           updated_at: new Date().toISOString()
         })
@@ -228,7 +249,7 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
 
       if (syncError) {
         console.error('Main row score sync error:', syncError)
-      } else {
+      } else if (savedData) {
         savedData.score = aggregateScore
         savedData.realization_value = aggregateRealization
       }

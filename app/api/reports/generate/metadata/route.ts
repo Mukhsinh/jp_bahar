@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient, createClient } from '@/lib/supabase/server'
+import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 
 export async function GET(request: NextRequest) {
     try {
@@ -7,7 +8,7 @@ export async function GET(request: NextRequest) {
         const type = searchParams.get('type')
 
         const supabaseClient = await createClient()
-        const { data: { user } } = await supabaseClient.auth.getUser()
+        const user = await getAuthenticatedUser(supabaseClient, request)
 
         if (!user) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -22,8 +23,19 @@ export async function GET(request: NextRequest) {
             .eq('user_id', user.id)
             .maybeSingle()
 
-        const authRole = user.app_metadata?.role || user.user_metadata?.role
-        const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaibahar.com'
+        if (!employee && user.email) {
+            const { data: empByEmail } = await supabase
+                .from('m_employees')
+                .select('id, role, unit_id')
+                .eq('email', user.email)
+                .maybeSingle()
+            if (empByEmail) {
+                employee = empByEmail
+            }
+        }
+
+        const authRole = user.app_metadata?.role || user.user_metadata?.role || (user as any).role
+        const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaibahar.com'
 
         if (!employee) {
             if (isSuperAdmin) {

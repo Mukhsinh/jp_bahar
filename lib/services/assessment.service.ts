@@ -174,10 +174,9 @@ export async function upsertAssessment(assessment: Assessment): Promise<Assessme
       score = (achievement * assessment.weight_percentage) / 100
     }
 
+    const { achievement_percentage: _, score: __, ...cleanAssessment } = assessment
     const assessmentData = {
-      ...assessment,
-      achievement_percentage: achievement,
-      score: score
+      ...cleanAssessment
     }
 
     const { data: existing } = await supabase

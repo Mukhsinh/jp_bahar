@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient, createClient } from '@/lib/supabase/server'
+import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 import { isMedicalUnit } from '@/lib/utils/medical-unit'
+import { getTERCategory, getTERRate } from '@/lib/formulas/ter-lookup'
 import * as fs from 'fs'
 
 const OMIT_KEYS = ['created_at', 'updated_at', 'created_by', 'updated_by']
@@ -56,8 +58,6 @@ async function batchedIn(
   console.log(`[batchedIn] ${table}.${filterColumn}: ${filterValues.length} IDs -> ${results.length} total rows fetched`)
   return results
 }
-
-import { getTERCategory, getTERRate } from '@/lib/formulas/ter-lookup'
 
 function calculatePPh21(
   monthlyGross: number,
@@ -166,7 +166,7 @@ async function savePIRHistory(
  */
 export async function POST(request: NextRequest) {
   try {
-    const { reportType, period, unitId: reqUnitId, employeeId, detailLevel } = await request.json()
+    const { reportType, period, unitId: reqUnitId, employeeId, detailLevel, revenueType = 'all' } = await request.json()
 
     if (!reportType || !period) {
       return NextResponse.json(
@@ -176,7 +176,7 @@ export async function POST(request: NextRequest) {
     }
 
     const supabaseClient = await createClient()
-    const { data: { user } } = await supabaseClient.auth.getUser()
+    const user = await getAuthenticatedUser(supabaseClient, request)
 
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -191,8 +191,19 @@ export async function POST(request: NextRequest) {
       .eq('user_id', user.id)
       .maybeSingle()
 
-    const authRole = user.app_metadata?.role || user.user_metadata?.role
-    const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaibahar.com'
+    if (!employee && user.email) {
+      const { data: empByEmail } = await supabase
+        .from('m_employees')
+        .select('role, unit_id')
+        .eq('email', user.email)
+        .maybeSingle()
+      if (empByEmail) {
+        employee = empByEmail
+      }
+    }
+
+    const authRole = user.app_metadata?.role || user.user_metadata?.role || (user as any).role
+    const isSuperAdmin = authRole === 'superadmin' || authRole === 'admin' || user.email === 'admin@sungaibahar.com'
 
     if (!employee) {
       if (isSuperAdmin) {
@@ -239,6 +250,10 @@ export async function POST(request: NextRequest) {
       .eq('period', period)
       .limit(1)
 
+    if (revenueType && revenueType !== 'all') {
+      assessmentQuery = assessmentQuery.eq('revenue_type', revenueType)
+    }
+
     if (unitId && unitId !== 'all') {
       // If a unit is specified, we check if there are assessments for employees in that unit
       const { data: unitEmps } = await supabase
@@ -270,18 +285,74 @@ export async function POST(request: NextRequest) {
 
     let data: any[] = []
 
+    const _mergeIncentives = (list1: any[], list2: any[]) => {
+      const mergedMap = new Map<string, any>();
+      for (const row of list1) mergedMap.set(row.employee_id || row.nik + row.employee_name, { ...row });
+      for (const row of list2) {
+        const id = row.employee_id || row.nik + row.employee_name;
+        const existing = mergedMap.get(id);
+        if (existing) {
+          existing.p1_score = Number(existing.p1_score || 0) + Number(row.p1_score || 0);
+          existing.p2_score = Number(existing.p2_score || 0) + Number(row.p2_score || 0);
+          existing.p3_score = Number(existing.p3_score || 0) + Number(row.p3_score || 0);
+          existing.total_score = Number(existing.total_score || 0) + Number(row.total_score || 0);
+          existing.p1_priority = Number(existing.p1_priority || 0) + Number(row.p1_priority || 0);
+          existing.p2_priority = Number(existing.p2_priority || 0) + Number(row.p2_priority || 0);
+          existing.p3_priority = Number(existing.p3_priority || 0) + Number(row.p3_priority || 0);
+          existing.total_priority_score = Number(existing.total_priority_score || 0) + Number(row.total_priority_score || 0);
+          existing.total_activity = Number(existing.total_activity || 0) + Number(row.total_activity || 0);
+          existing.total_activity_rupiah = Number(existing.total_activity_rupiah || 0) + Number(row.total_activity_rupiah || 0);
+          existing.pir_value = Number(existing.pir_value || 0) + Number(row.pir_value || 0);
+          existing.index_incentive = Number(existing.index_incentive || 0) + Number(row.index_incentive || 0);
+          existing.guarantee_fee = Number(existing.guarantee_fee || 0) + Number(row.guarantee_fee || 0);
+          existing.gross_incentive = Number(existing.gross_incentive || 0) + Number(row.gross_incentive || 0);
+          existing.tax_amount = Number(existing.tax_amount || 0) + Number(row.tax_amount || 0);
+          existing.net_incentive = Number(existing.net_incentive || 0) + Number(row.net_incentive || 0);
+          existing.unit_proportion = (existing.unit_proportion && row.unit_proportion && existing.unit_proportion !== row.unit_proportion) ? `${existing.unit_proportion} / ${row.unit_proportion}` : (existing.unit_proportion || row.unit_proportion);
+
+          if (existing.assessment_details && row.assessment_details) {
+            existing.assessment_details = [...existing.assessment_details, ...row.assessment_details];
+          }
+          if (existing.p1_breakdown && row.p1_breakdown) {
+            existing.p1_breakdown = [...existing.p1_breakdown, ...row.p1_breakdown];
+          }
+          if (existing.p2_breakdown && row.p2_breakdown) {
+            existing.p2_breakdown = [...existing.p2_breakdown, ...row.p2_breakdown];
+          }
+          if (existing.p3_breakdown && row.p3_breakdown) {
+            existing.p3_breakdown = [...existing.p3_breakdown, ...row.p3_breakdown];
+          }
+        } else {
+          mergedMap.set(id, { ...row });
+        }
+      }
+      return Array.from(mergedMap.values());
+    }
+
     switch (reportType) {
       case 'incentive':
-        data = await generateIncentiveReport(supabase, period, unitId, employeeId)
+        if (revenueType === 'all') {
+          const bpjs = await generateIncentiveReport(supabase, period, unitId, employeeId, 'bpjs')
+          const umum = await generateIncentiveReport(supabase, period, unitId, employeeId, 'umum')
+          data = _mergeIncentives(bpjs, umum)
+        } else {
+          data = await generateIncentiveReport(supabase, period, unitId, employeeId, revenueType)
+        }
         break
       case 'kpi-achievement':
-        data = await generateKPIAchievementReport(supabase, period, unitId, employeeId, detailLevel)
+        data = await generateKPIAchievementReport(supabase, period, unitId, employeeId, detailLevel, revenueType)
         break
       case 'unit-comparison':
-        data = await generateUnitComparisonReport(supabase, period, unitId)
+        data = await generateUnitComparisonReport(supabase, period, unitId, revenueType)
         break
       case 'employee-slip':
-        data = await generateEmployeeSlipReport(supabase, period, unitId, employeeId)
+        if (revenueType === 'all') {
+          const bpjsSlip = await generateEmployeeSlipReport(supabase, period, unitId, employeeId, 'bpjs')
+          const umumSlip = await generateEmployeeSlipReport(supabase, period, unitId, employeeId, 'umum')
+          data = _mergeIncentives(bpjsSlip, umumSlip)
+        } else {
+          data = await generateEmployeeSlipReport(supabase, period, unitId, employeeId, revenueType)
+        }
         break
       default:
         return NextResponse.json(
@@ -325,7 +396,11 @@ export async function POST(request: NextRequest) {
             'employee_id',
             'employee_id',
             unitEmpIds,
-            q => q.eq('period', period)
+            q => {
+              let qry = q.eq('period', period)
+              if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+              return qry
+            }
           )
 
           const uniqueAssessedIds = new Set((assessedEmps || []).map((a: any) => a.employee_id))
@@ -422,11 +497,11 @@ export async function POST(request: NextRequest) {
  * Bruto = Skor_Individu × PIR
  * Netto = Bruto - PPh21
  */
-export async function generateIncentiveReport(supabase: any, period: string, unitId?: string, employeeId?: string) {
+export async function generateIncentiveReport(supabase: any, period: string, unitId?: string, employeeId?: string, revenueType: string = 'all') {
   // 1. Get Pool
   const { data: poolData, error: poolError } = await supabase
     .from('t_pool')
-    .select('net_pool')
+    .select('net_pool, allocated_bpjs, allocated_umum')
     .eq('period', period)
     .maybeSingle()
 
@@ -443,14 +518,19 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
   const taxMechanism = (taxSetting?.value as any)?.mechanism || 'ter'
 
-  const netPool = Number(poolData.net_pool || 0);
+  let netPool = Number(poolData.net_pool || 0);
+  if (revenueType === 'bpjs') {
+    netPool = Number(poolData.allocated_bpjs || poolData.net_pool || 0);
+  } else if (revenueType === 'umum') {
+    netPool = Number(poolData.allocated_umum || poolData.net_pool || 0);
+  }
 
   // 2. Fetch active employees (filtered by unit/employee if specified)
   // 2. Fetch all employees (including inactive if they have assessments)
   // We remove is_active check because if they have assessments in this period, they should be in the report
   let empQuery = supabase
     .from('m_employees')
-    .select('*, m_units(id, name, proportion_percentage)')
+    .select('*, m_units(id, name, proportion_percentage, proportion_umum_percentage)')
     .neq('role', 'superadmin')
 
   if (employeeId && employeeId !== 'all') {
@@ -508,7 +588,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       mainSelectFields,
       'employee_id',
       empIds,
-      q => q.eq('period', period).is('sub_indicator_id', null)
+      q => {
+        let qry = q.eq('period', period).is('sub_indicator_id', null)
+        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+        return qry
+      }
     ),
     batchedIn(
       supabase,
@@ -516,7 +600,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       'employee_id, indicator_id, score, realization_value',
       'employee_id',
       empIds,
-      q => q.eq('period', period).not('sub_indicator_id', 'is', null)
+      q => {
+        let qry = q.eq('period', period).not('sub_indicator_id', 'is', null)
+        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+        return qry
+      }
     )
   ])
 
@@ -750,7 +838,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     // Determine Style
     const unitName = unitData?.name || '-'
     const isMedical = isMedicalUnit(uId, unitName)
-    const unitProp = parseFloat(unitData?.proportion_percentage || '0')
+    const unitProp = parseFloat(
+      revenueType === 'umum'
+        ? (unitData?.proportion_umum_percentage ?? unitData?.proportion_percentage ?? '0')
+        : (unitData?.proportion_percentage || '0')
+    )
     const totalSkorUnit = unitTotalScoresMap.get(uId) || 0
     const empCount = unitEmployeeCountMap.get(uId) || 0
     const allocatedForUnit = netPool * (unitProp / 100)
@@ -872,6 +964,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     }
 
     report.push({
+      employee_id: empId,
       employee_code: emp.employee_code || '-',
       nik: mappedNik,
       employee_name: emp.full_name,
@@ -922,7 +1015,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
  * Generate KPI Achievement Report
  * Averages out achievement per indicator across all employees in the period.
  */
-async function generateKPIAchievementReport(supabase: any, period: string, unitId?: string, employeeId?: string, detailLevel?: string) {
+async function generateKPIAchievementReport(supabase: any, period: string, unitId?: string, employeeId?: string, detailLevel?: string, revenueType: string = 'all') {
   // Fetch Assessment Data - only main indicator rows (sub_indicator_id IS NULL)
   const kpiSelectFields = `
     realization_value,
@@ -978,16 +1071,25 @@ async function generateKPIAchievementReport(supabase: any, period: string, unitI
       kpiSelectFields,
       'employee_id',
       empIds,
-      q => q.eq('period', period).is('sub_indicator_id', null)
+      q => {
+        let qry = q.eq('period', period).is('sub_indicator_id', null)
+        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+        return qry
+      }
     )
   } else {
     // No unit/employee filter — fetch all
-    const { data, error: assError } = await supabase
+    let fetchQry = supabase
       .from('t_kpi_assessments')
       .select(kpiSelectFields)
       .eq('period', period)
       .is('sub_indicator_id', null)
-      .range(0, 50000)
+
+    if (revenueType && revenueType !== 'all') {
+      fetchQry = fetchQry.eq('revenue_type', revenueType)
+    }
+
+    const { data, error: assError } = await fetchQry.range(0, 50000)
     if (assError) throw assError
     assessments = data || []
   }
@@ -1093,9 +1195,9 @@ async function generateKPIAchievementReport(supabase: any, period: string, unitI
  * Generate Unit Comparison Report
  * Uses the dynamically calculated incentive report data to aggregate by unit.
  */
-async function generateUnitComparisonReport(supabase: any, period: string, unitId?: string) {
+async function generateUnitComparisonReport(supabase: any, period: string, unitId?: string, revenueType: string = 'all') {
   // Reuse the dynamic incentive generation logic
-  const topLevelData = await generateIncentiveReport(supabase, period, unitId)
+  const topLevelData = await generateIncentiveReport(supabase, period, unitId, 'all', revenueType)
 
   // Aggregate by unit
   const unitMap = new Map()
@@ -1137,9 +1239,9 @@ async function generateUnitComparisonReport(supabase: any, period: string, unitI
  * Generate Employee Slip Report
  * Uses enriched data from generateIncentiveReport including assessment_details and category weights.
  */
-async function generateEmployeeSlipReport(supabase: any, period: string, unitId?: string, employeeId?: string) {
+async function generateEmployeeSlipReport(supabase: any, period: string, unitId?: string, employeeId?: string, revenueType: string = 'all') {
   // Reuse the dynamic total calculations (now includes assessment_details & weights)
-  const topLevelData = await generateIncentiveReport(supabase, period, unitId, employeeId)
+  const topLevelData = await generateIncentiveReport(supabase, period, unitId, employeeId, revenueType)
 
   const results = []
 

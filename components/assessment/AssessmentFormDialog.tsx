@@ -375,8 +375,6 @@ export default function AssessmentFormDialog({
             realization_value: assessment.realization_value,
             target_value: getIndicatorTarget(indicator),
             weight_percentage: indicator.weight_percentage,
-            achievement_percentage: assessment.achievement_percentage,
-            score: assessment.score,
             notes: assessment.notes,
             revenue_type: activeRevenueType,
             sub_assessments: assessment.sub_assessments.map(sub => ({

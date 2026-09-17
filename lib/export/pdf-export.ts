@@ -69,6 +69,7 @@ interface ReportExportOptions {
   reportType: string
   period: string
   data: any[]
+  revenueType?: string
 }
 
 /**
@@ -78,9 +79,17 @@ async function addKopSurat(doc: jsPDF, companyInfo: any) {
   // Add logo if exists
   if (companyInfo.logo) {
     try {
-      // Basic image support (base64 or URL)
-      if (companyInfo.logo.startsWith('data:image') || companyInfo.logo.startsWith('http')) {
+      // Image support (base64 or URL)
+      if (companyInfo.logo.startsWith('data:image')) {
         doc.addImage(companyInfo.logo, 'PNG', 15, 8, 22, 22)
+      } else if (companyInfo.logo.startsWith('http')) {
+        const imgRes = await fetch(companyInfo.logo);
+        const arrayBuffer = await imgRes.arrayBuffer();
+        let format = 'PNG';
+        if (companyInfo.logo.toLowerCase().includes('.jpg') || companyInfo.logo.toLowerCase().includes('.jpeg')) {
+          format = 'JPEG';
+        }
+        doc.addImage(new Uint8Array(arrayBuffer) as any, format, 15, 8, 22, 22)
       }
     } catch (e) {
       console.error('Error adding logo to PDF:', e)
@@ -113,7 +122,7 @@ async function addKopSurat(doc: jsPDF, companyInfo: any) {
 /**
  * Generate incentive slip PDF
  */
-export async function generateIncentiveSlipPDF(data: IncentiveSlipData | IncentiveSlipData[]): Promise<Uint8Array> {
+export async function generateIncentiveSlipPDF(data: IncentiveSlipData | IncentiveSlipData[], revenueType?: string): Promise<Uint8Array> {
   const doc = new jsPDF()
   const companyInfo = await getCompanyInfoServer()
   const footerSetting = await getSettingServer('footer')
@@ -157,6 +166,10 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     doc.text(`No. Rekening`, rightX + 2, 61); doc.text(`: ${slip.bankAccountNumber || '-'}`, rightX + 35, 61)
     doc.text(`Nama Pemilik`, rightX + 2, 66); doc.text(`: ${slip.bankAccountHolder || '-'}`, rightX + 35, 66)
 
+    if (revenueType) {
+      const revLabel = revenueType === 'bpjs' ? 'BPJS Kesehatan' : revenueType === 'umum' ? 'Pendapatan UMUM' : 'Konsolidasi (BPJS & UMUM)'
+      doc.text(`Jenis Pendapatan`, rightX + 2, 71); doc.text(`: ${revLabel}`, rightX + 35, 71)
+    }
 
     // Summary Table - use dynamic weights from KPI config
     const p1w = slip.p1Weight || 0
@@ -252,7 +265,7 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     doc.text(`Formula: PIR = ((Alokasi Dana Unit) - (Insentif Kuantitatif Unit)) / Total Skor Seluruh Pegawai di Unit`, 15, yPos)
     yPos += 5
     doc.text(`Proporsi Unit ${slip.unit}`, 20, yPos)
-    doc.text(`: ${fmtNum(slip.unitProportion)}%`, 95, yPos)
+    doc.text(`: ${Number(slip.unitProportion || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`, 95, yPos)
     yPos += 5
     doc.text(`Alokasi Dana Unit (Awal)`, 20, yPos)
     doc.text(`: Rp ${fmtNum(allocatedForUnit)}`, 95, yPos)
@@ -499,12 +512,13 @@ export async function generateSummaryReportPDF(
     })
   } else {
     // Default to incentive
-    head = [['No', 'NIP/NIK', 'Nama Pegawai', 'Unit', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas', 'PIR', 'Insentif Bruto', 'Pajak', 'Netto']]
+    head = [['No', 'NIP/NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas', 'PIR', 'Insentif Bruto', 'Pajak', 'Netto']]
     body = results.map((r, i) => [
       i + 1,
       r.employee_code || '-',
       r.employee_name,
       r.unit,
+      r.unit_proportion ? `${Number(r.unit_proportion).toFixed(2)}%` : '-',
       formatScore(r.p1_score),
       formatScore(r.p2_score),
       formatScore(r.p3_score),
@@ -610,7 +624,7 @@ export async function exportToPDF(options: ReportExportOptions): Promise<Uint8Ar
         })()
       }
     })
-    return await generateIncentiveSlipPDF(slips)
+    return await generateIncentiveSlipPDF(slips, options.revenueType)
   } else if (options.reportType === 'dashboard-summary') {
     return await generateDashboardReportPDF(options.data, options.period)
   } else if (options.reportType === 'user-list') {
