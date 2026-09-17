@@ -28,7 +28,7 @@ interface IncentiveSlipData {
   finalScore: number
   pirValue: number
   totalSkorUnit: number
-  unitProportion: number
+  unitProportion: number | string
   unitAllocation?: number
   unitTotalActivity?: number
   totalActivityRupiah: number
@@ -265,7 +265,13 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     doc.text(`Formula: PIR = ((Alokasi Dana Unit) - (Insentif Kuantitatif Unit)) / Total Skor Seluruh Pegawai di Unit`, 15, yPos)
     yPos += 5
     doc.text(`Proporsi Unit ${slip.unit}`, 20, yPos)
-    doc.text(`: ${Number(slip.unitProportion || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`, 95, yPos)
+
+    // Check if it's already a formatted string 
+    const propDisplay = typeof slip.unitProportion === 'string' && slip.unitProportion.includes('%')
+      ? slip.unitProportion
+      : `${Number(slip.unitProportion || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+
+    doc.text(`: ${propDisplay}`, 95, yPos)
     yPos += 5
     doc.text(`Alokasi Dana Unit (Awal)`, 20, yPos)
     doc.text(`: Rp ${fmtNum(allocatedForUnit)}`, 95, yPos)
@@ -518,7 +524,7 @@ export async function generateSummaryReportPDF(
       r.employee_code || '-',
       r.employee_name,
       r.unit,
-      r.unit_proportion ? `${Number(r.unit_proportion).toFixed(2)}%` : '-',
+      (typeof r.unit_proportion === 'string' && r.unit_proportion.includes('%')) ? r.unit_proportion : r.unit_proportion ? `${Number(r.unit_proportion).toFixed(2)}%` : '-',
       formatScore(r.p1_score),
       formatScore(r.p2_score),
       formatScore(r.p3_score),
@@ -599,7 +605,9 @@ export async function exportToPDF(options: ReportExportOptions): Promise<Uint8Ar
         finalScore: parseNum(item.total_score),
         pirValue: parseNum(item.pir_value),
         totalSkorUnit: parseNum(item.total_skor_unit),
-        unitProportion: parseNum(item.unit_proportion),
+        unitProportion: typeof item.unit_proportion === 'string' && item.unit_proportion.includes('%')
+          ? item.unit_proportion
+          : parseNum(item.unit_proportion),
         unitAllocation: parseNum(item.unit_allocation),
         unitTotalActivity: parseNum(item.unit_total_activity),
         totalActivityRupiah: parseNum(item.total_activity_rupiah || item.total_activity),

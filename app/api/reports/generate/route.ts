@@ -308,7 +308,20 @@ export async function POST(request: NextRequest) {
           existing.gross_incentive = Number(existing.gross_incentive || 0) + Number(row.gross_incentive || 0);
           existing.tax_amount = Number(existing.tax_amount || 0) + Number(row.tax_amount || 0);
           existing.net_incentive = Number(existing.net_incentive || 0) + Number(row.net_incentive || 0);
-          existing.unit_proportion = (existing.unit_proportion && row.unit_proportion && existing.unit_proportion !== row.unit_proportion) ? `${existing.unit_proportion} / ${row.unit_proportion}` : (existing.unit_proportion || row.unit_proportion);
+
+          existing.unit_allocation = Number(existing.unit_allocation || 0) + Number(row.unit_allocation || 0);
+          existing.unit_total_activity = Number(existing.unit_total_activity || 0) + Number(row.unit_total_activity || 0);
+
+          // Handle proportion safely. If they differ, stringify them nicely (e.g. "0.22% / 0.15%").
+          const formatProp = (val: any) => {
+            if (typeof val === 'string' && val.includes('%')) return val; // Already formatted
+            return val ? `${Number(val).toFixed(2)}%` : '0.00%';
+          }
+          if (existing.unit_proportion && row.unit_proportion && existing.unit_proportion !== row.unit_proportion) {
+            existing.unit_proportion = `${formatProp(existing.unit_proportion)} / ${formatProp(row.unit_proportion)}`;
+          } else {
+            existing.unit_proportion = existing.unit_proportion || row.unit_proportion;
+          }
 
           if (existing.assessment_details && row.assessment_details) {
             existing.assessment_details = [...existing.assessment_details, ...row.assessment_details];
@@ -501,7 +514,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
   // 1. Get Pool
   const { data: poolData, error: poolError } = await supabase
     .from('t_pool')
-    .select('net_pool, allocated_bpjs, allocated_umum')
+    .select('net_pool, allocated_bpjs, allocated_umum, revenue_bpjs, revenue_umum, revenue_total')
     .eq('period', period)
     .maybeSingle()
 
@@ -518,11 +531,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
   const taxMechanism = (taxSetting?.value as any)?.mechanism || 'ter'
 
-  let netPool = Number(poolData.net_pool || 0);
+  let netPool = Number(poolData.revenue_total || poolData.net_pool || 0);
   if (revenueType === 'bpjs') {
-    netPool = Number(poolData.allocated_bpjs || poolData.net_pool || 0);
+    netPool = Number(poolData.revenue_bpjs || poolData.allocated_bpjs || poolData.net_pool || 0);
   } else if (revenueType === 'umum') {
-    netPool = Number(poolData.allocated_umum || poolData.net_pool || 0);
+    netPool = Number(poolData.revenue_umum || poolData.allocated_umum || poolData.net_pool || 0);
   }
 
   // 2. Fetch active employees (filtered by unit/employee if specified)
