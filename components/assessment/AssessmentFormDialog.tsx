@@ -316,7 +316,7 @@ export default function AssessmentFormDialog({
         if (isQuantitativeIndicator || isMedicalUnit) {
           totalAchievement = 100 // Placeholder visual
         } else {
-          totalAchievement = maxTarget > 0 ? (sumScores / maxTarget) * 100 : 0
+          totalAchievement = maxTarget > 0 ? (sumScores / maxTarget) * 100 : sumScores
         }
       } else {
         totalAchievement = current.achievement_percentage
@@ -326,6 +326,10 @@ export default function AssessmentFormDialog({
       const category = categories.find(c => c.indicators.some(i => i.id === indicatorId))
       const isPriority = indicator && (indicator.calculation_method === 'priority' || category?.configuration_style === 'activity')
 
+      // If qualitative sub-indicators without target, use sum of scores without cap.
+      const maxTarget = indicator ? getIndicatorTarget(indicator) : 0
+      const finalScore = isPriority ? Number(sumScores.toFixed(4)) : (indicator && indicator.sub_indicators.length > 0 && maxTarget === 0 ? sumScores : calculateScore(totalAchievement))
+
       return {
         ...prev,
         [indicatorId]: {
@@ -333,7 +337,7 @@ export default function AssessmentFormDialog({
           realization_value: Number(sumVolumes.toFixed(4)),
           sub_assessments: subAssessments,
           achievement_percentage: Number(totalAchievement.toFixed(2)),
-          score: isPriority ? Number(sumScores.toFixed(4)) : calculateScore(totalAchievement)
+          score: finalScore
         }
       }
     })
@@ -785,10 +789,29 @@ export default function AssessmentFormDialog({
                   <div className="space-y-6">
                     {category.indicators.map((indicator) => {
                       const assessment = assessments[indicator.id]
-                      const realizationValue = assessment?.realization_value || 0
-                      const achievementPct = assessment?.achievement_percentage || 0
-                      const score = achievementPct // Show achievement as base score
+                      let realizationValue = assessment?.realization_value || 0
+                      let achievementPct = assessment?.achievement_percentage || 0
+                      let score = assessment?.score || 0
                       const hasSubIndicators = indicator.sub_indicators && indicator.sub_indicators.length > 0
+
+                      // Workaround: Re-hydrate zeroed generated columns from DB using the preserved realization_values
+                      if (hasSubIndicators && getIndicatorTarget(indicator) === 0) {
+                        let calcSum = 0;
+                        let isQuant = false;
+                        (assessment?.sub_assessments || []).forEach(sub => {
+                          const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
+                          if (subConf?.measurement_type === 'quantitative') isQuant = true;
+                          const w = (isMedicalUnit || isQuant) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
+                          calcSum += (sub.realization_value || 0) * w
+                        })
+                        achievementPct = calcSum;
+                        score = calcSum;
+                      }
+
+                      let displayedScore = score
+                      if (!isMedicalUnit && category.is_weighted !== false && indicator.calculation_method !== 'priority') {
+                        displayedScore = score * (indicator.weight_percentage / 100)
+                      }
 
                       return (
                         <div key={indicator.id} className="border rounded-lg p-4 space-y-4">
@@ -861,8 +884,8 @@ export default function AssessmentFormDialog({
                             <div>
                               <Label className="text-sm font-medium">Skor Dasar</Label>
                               <div className="mt-1">
-                                <Badge className={getAchievementBadge(score)}>
-                                  {score.toFixed(2)}
+                                <Badge className={getAchievementBadge(displayedScore)}>
+                                  {displayedScore.toFixed(2)}
                                 </Badge>
                               </div>
                             </div>
@@ -876,8 +899,17 @@ export default function AssessmentFormDialog({
                                 {indicator.sub_indicators.map((sub) => {
                                   const subAssessment = assessment?.sub_assessments?.find(sa => sa.sub_indicator_id === sub.id)
                                   const subRealization = subAssessment?.realization_value || 0
-                                  const subScore = subAssessment?.score || 0
                                   const isQuantitative = sub.measurement_type === 'quantitative'
+                                  let subScore = subAssessment?.score || 0
+
+                                  if (subAssessment && !subAssessment.score && subRealization > 0) {
+                                    if (isQuantitative) {
+                                      subScore = subRealization * (sub.base_index_value || 1)
+                                    } else {
+                                      subScore = subRealization
+                                    }
+                                  }
+
                                   const hasCriteria = !isQuantitative && sub.scoring_criteria && sub.scoring_criteria.length > 0
 
                                   return (
@@ -984,7 +1016,7 @@ export default function AssessmentFormDialog({
                                             <Button
                                               key={cIdx}
                                               type="button"
-                                              variant={subScore === criterion.score ? 'default' : 'outline'}
+                                              variant={subRealization === criterion.score ? 'default' : 'outline'}
                                               size="sm"
                                               className="h-8 text-xs px-2"
                                               onClick={() => handleSubAssessmentChange(indicator.id, sub.id, criterion.score, criterion.score)}
