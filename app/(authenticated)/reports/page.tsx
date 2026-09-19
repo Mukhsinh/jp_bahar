@@ -179,8 +179,9 @@ function UnitComparisonTable({ data }: { data: any[] }) {
       <thead>
         <tr className="bg-gray-100">
           <th className="border p-2 text-left font-semibold text-[10px]">UNIT</th>
+          <th className="border p-2 text-right font-semibold text-[10px]">PORSI UNIT</th>
           <th className="border p-2 text-right font-semibold text-[10px]">RATA-RATA SKOR INDEKS</th>
-          <th className="border p-2 text-right font-semibold text-[10px]">RATA-RATA PRIORITAS (RP)</th>
+          <th className="border p-2 text-right font-semibold text-[10px]">TOTAL PRIORITAS (RP)</th>
           <th className="border p-2 text-right font-semibold text-[10px]">TOTAL POIN INDEKS UNIT</th>
           <th className="border p-2 text-right font-semibold text-[10px]">TOTAL AKTIVITAS UNIT (RP)</th>
           <th className="border p-2 text-right font-semibold text-[10px]">PIR UNIT</th>
@@ -192,8 +193,9 @@ function UnitComparisonTable({ data }: { data: any[] }) {
         {data.map((row: any, idx: number) => (
           <tr key={idx} className="hover:bg-gray-50 text-xs">
             <td className="border p-2 font-medium">{safeRender(row.unit_name)}</td>
+            <td className="border p-2 text-right font-mono text-gray-700">{row.unit_proportion}</td>
             <td className="border p-2 text-right font-bold text-blue-700">{formatNumber(row.average_score || 0, 2)}</td>
-            <td className="border p-2 text-right text-orange-600">{formatCurrency(row.average_priority || 0)}</td>
+            <td className="border p-2 text-right text-orange-600">{formatCurrency(row.total_priority || 0)}</td>
             <td className="border p-2 text-right">{formatNumber(row.total_unit_score || 0, 2)}</td>
             <td className="border p-2 text-right text-orange-700">{formatCurrency(row.total_unit_activity || 0)}</td>
             <td className="border p-2 text-right text-purple-600">{formatCurrency(row.pir_value || 0, true, 2)}</td>
@@ -684,7 +686,7 @@ export default function ReportsPage() {
             {reportData.map((row: any, idx: number) => (
               <div key={idx} className="p-4 bg-gray-50 rounded-lg border border-gray-100 hover:shadow-md transition-shadow">
                 <div className="text-sm text-gray-500">{row.unit_name}</div>
-                <div className="text-2xl font-bold text-blue-600">{row.average_score}</div>
+                <div className="text-2xl font-bold text-blue-600">{formatNumber(row.average_score || 0, 2)}</div>
                 <div className="text-xs text-gray-400 mt-1">{row.employee_count} Pegawai</div>
               </div>
             ))}

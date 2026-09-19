@@ -610,7 +610,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     batchedIn(
       supabase,
       't_kpi_assessments',
-      'employee_id, indicator_id, score, realization_value',
+      'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value)',
       'employee_id',
       empIds,
       q => {
@@ -629,12 +629,25 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
   for (const sub of subAssessments) {
     const key = `${sub.employee_id}:${sub.indicator_id}`
     const existing = subScoreMap.get(key)
+
+    // dynamically compute score if it's quantitative and wasn't correctly stored previously
+    let effectiveScore = Number(sub.score || 0)
+    if (sub.m_kpi_sub_indicators?.measurement_type === 'quantitative') {
+      const tariff = Number(sub.m_kpi_sub_indicators?.base_index_value || 1);
+      const realScore = Number(sub.realization_value || 0) * tariff;
+
+      // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and tariff > 1)
+      if (realScore > 0 && effectiveScore !== realScore && tariff > 1) {
+        effectiveScore = realScore;
+      }
+    }
+
     if (existing) {
-      existing.score += Number(sub.score || 0)
+      existing.score += effectiveScore
       existing.realization += Number(sub.realization_value || 0)
     } else {
       subScoreMap.set(key, {
-        score: Number(sub.score || 0),
+        score: effectiveScore,
         realization: Number(sub.realization_value || 0)
       })
     }
@@ -687,23 +700,27 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         const isPriority = calcMethod === 'priority'
         const isActivity = isPriority
 
-        // Resolve effective score: prefer main row score, fallback to sub-assessment aggregate, tariff product, or computed achievement
+        // Resolve effective score: prefer sub-assessment aggregate, fallback to main row score, tariff product, or computed achievement
         let effectiveScore: number
-        if (rawScore !== null && rawScore !== undefined && parseFloat(rawScore) > 0) {
-          effectiveScore = parseFloat(rawScore)
-        } else {
-          const subKey = `${empId}:${a.indicator_id}`
-          const subAgg = subScoreMap.get(subKey)
-          if (subAgg && subAgg.score > 0) {
-            effectiveScore = subAgg.score
-          } else if (basicVal > 1) {
+        const subKey = `${empId}:${a.indicator_id}`
+        const subAgg = subScoreMap.get(subKey)
+
+        if (subAgg && subAgg.score > 0) {
+          effectiveScore = subAgg.score
+        } else if (rawScore !== null && rawScore !== undefined && parseFloat(rawScore) > 0) {
+          if (isActivity && basicVal > 1 && parseFloat(rawScore) === indRealization) {
+            // Legacy bug where parent row score recorded only volume instead of multiplied tariff
             effectiveScore = indRealization * basicVal
-          } else if (indTarget > 0) {
-            const achPct = Math.min(100, (indRealization / indTarget) * 100)
-            effectiveScore = indWeight > 0 ? (achPct * indWeight) / 100 : achPct
           } else {
-            effectiveScore = indRealization
+            effectiveScore = parseFloat(rawScore)
           }
+        } else if (basicVal > 1) {
+          effectiveScore = indRealization * basicVal
+        } else if (indTarget > 0) {
+          const achPct = Math.min(100, (indRealization / indTarget) * 100)
+          effectiveScore = indWeight > 0 ? (achPct * indWeight) / 100 : achPct
+        } else {
+          effectiveScore = indRealization
         }
 
         const indicatorScore = effectiveScore
@@ -1209,6 +1226,20 @@ async function generateKPIAchievementReport(supabase: any, period: string, unitI
  * Uses the dynamically calculated incentive report data to aggregate by unit.
  */
 async function generateUnitComparisonReport(supabase: any, period: string, unitId?: string, revenueType: string = 'all') {
+  // 1. Get Pool for Revenue
+  const { data: poolData } = await supabase
+    .from('t_pool')
+    .select('net_pool, allocated_bpjs, allocated_umum, revenue_bpjs, revenue_umum, revenue_total')
+    .eq('period', period)
+    .maybeSingle()
+
+  let netPool = Number(poolData?.revenue_total || poolData?.net_pool || 0);
+  if (revenueType === 'bpjs') {
+    netPool = Number(poolData?.revenue_bpjs || poolData?.allocated_bpjs || poolData?.net_pool || 0);
+  } else if (revenueType === 'umum') {
+    netPool = Number(poolData?.revenue_umum || poolData?.allocated_umum || poolData?.net_pool || 0);
+  }
+
   // Reuse the dynamic incentive generation logic
   const topLevelData = await generateIncentiveReport(supabase, period, unitId, 'all', revenueType)
 
@@ -1218,34 +1249,41 @@ async function generateUnitComparisonReport(supabase: any, period: string, unitI
   topLevelData.forEach(row => {
     const uName = row.unit
     if (!unitMap.has(uName)) {
+      let rawProp = typeof row.unit_proportion === 'string' ? parseFloat((row.unit_proportion as String).replace('%', '')) : Number(row.unit_proportion || 0)
+      if (isNaN(rawProp)) rawProp = 0;
+
       unitMap.set(uName, {
         unit_name: uName,
         total_score_sum: 0,
         total_activity_sum: 0,
-        total_incentive_sum: 0,
         employee_count: 0,
-        pir_value: row.pir_value || 0
+        pir_value: row.pir_value || 0,
+        unit_proportion: rawProp,
+        unit_proportion_str: row.unit_proportion
       })
     }
 
     const u = unitMap.get(uName)
     u.total_score_sum += Number(row.total_score || 0)
-    u.total_activity_sum += Number(row.total_activity || 0)
-    u.total_incentive_sum += Number(row.net_incentive || 0)
+    u.total_activity_sum += Number(row.total_priority_score || row.total_activity_rupiah || row.total_activity || 0)
     u.employee_count++
   })
 
   // Format Array
-  return Array.from(unitMap.values()).map(u => ({
-    unit_name: u.unit_name,
-    average_score: u.employee_count > 0 ? (u.total_score_sum / u.employee_count) : 0,
-    average_priority: u.employee_count > 0 ? (u.total_activity_sum / u.employee_count) : 0,
-    total_unit_score: u.total_score_sum,
-    total_unit_activity: u.total_activity_sum,
-    pir_value: u.pir_value,
-    total_incentive: u.total_incentive_sum,
-    employee_count: u.employee_count
-  }))
+  return Array.from(unitMap.values()).map(u => {
+    const calculatedIncentive = (u.unit_proportion / 100) * netPool;
+    return {
+      unit_name: u.unit_name,
+      unit_proportion: u.unit_proportion_str || `${u.unit_proportion.toFixed(2)}%`,
+      average_score: u.employee_count > 0 ? (u.total_score_sum / u.employee_count) : 0,
+      total_priority: u.total_activity_sum,
+      total_unit_score: u.total_score_sum,
+      total_unit_activity: u.total_activity_sum,
+      pir_value: u.pir_value,
+      total_incentive: calculatedIncentive,
+      employee_count: u.employee_count
+    }
+  })
 }
 
 /**

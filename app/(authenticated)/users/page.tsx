@@ -31,7 +31,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState<UserWithPegawai[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [roleFilter, setRoleFilter] = useState('all')
+  const [roleFilter, setRoleFilter] = useState('superadmin')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -112,7 +112,7 @@ export default function UsersPage() {
   const handleDownloadPDF = async () => {
     setIsExporting(true)
     try {
-      const result = await exportUserListToPDF()
+      const result = await exportUserListToPDF(searchTerm, roleFilter)
       if (result.error) throw new Error(result.error)
       if (result.data) {
         // Create a link and trigger download
@@ -195,14 +195,12 @@ export default function UsersPage() {
             <SelectTrigger className="h-14 bg-white/70 backdrop-blur-md border-slate-200 rounded-[1.25rem] text-xs font-black uppercase tracking-widest text-slate-500 shadow-sm focus:ring-4 focus:ring-blue-100 px-6 px-12">
               <div className="flex items-center gap-3">
                 <Filter size={16} className="text-slate-300 shrink-0" />
-                <SelectValue placeholder="Semua Peran" />
+                <SelectValue placeholder="Pilih Peran" />
               </div>
             </SelectTrigger>
             <SelectContent className="rounded-2xl border-slate-100 p-2 shadow-2xl">
-              <SelectItem value="all" className="rounded-xl font-bold text-xs uppercase tracking-widest py-3">Semua Pegawai</SelectItem>
               <SelectItem value="superadmin" className="rounded-xl font-bold text-xs uppercase tracking-widest py-3">Superadmin</SelectItem>
               <SelectItem value="unit_manager" className="rounded-xl font-bold text-xs uppercase tracking-widest py-3">Manajer Unit</SelectItem>
-              <SelectItem value="employee" className="rounded-xl font-bold text-xs uppercase tracking-widest py-3">Pegawai</SelectItem>
             </SelectContent>
           </Select>
         </div>

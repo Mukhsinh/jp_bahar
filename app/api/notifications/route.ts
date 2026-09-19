@@ -7,8 +7,11 @@ export async function GET(request: NextRequest) {
     const supabase = await createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
 
+    const searchParams = request.nextUrl.searchParams
+    const unreadOnly = searchParams.get('unreadOnly') === 'true'
+
     if (authError || !user) {
-      return NextResponse.json({ count: 0, data: [] })
+      return unreadOnly ? NextResponse.json({ count: 0 }) : NextResponse.json([])
     }
 
     // Get employee record first
@@ -19,11 +22,8 @@ export async function GET(request: NextRequest) {
       .maybeSingle()
 
     if (!employee) {
-      return NextResponse.json({ count: 0, data: [] })
+      return unreadOnly ? NextResponse.json({ count: 0 }) : NextResponse.json([])
     }
-
-    const searchParams = request.nextUrl.searchParams
-    const unreadOnly = searchParams.get('unreadOnly') === 'true'
 
     if (unreadOnly) {
       try {
@@ -41,8 +41,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json([])
     }
   } catch (error: any) {
-    // Always return safe fallback data
-    return NextResponse.json({ count: 0, data: [] })
+    const searchParams = request.nextUrl.searchParams
+    const unreadOnly = searchParams.get('unreadOnly') === 'true'
+    return unreadOnly ? NextResponse.json({ count: 0 }) : NextResponse.json([])
   }
 }
 

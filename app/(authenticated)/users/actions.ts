@@ -181,9 +181,9 @@ export async function getEmployeesForUserCreation(): Promise<{ data: any[]; erro
 /**
  * Server action to export user list to PDF
  */
-export async function exportUserListToPDF(): Promise<{ data?: string; error?: string }> {
+export async function exportUserListToPDF(searchTerm: string = '', roleFilter: string = 'superadmin'): Promise<{ data?: string; error?: string }> {
   try {
-    const { data: users, error } = await getUsers(1, 1000) // Get top 1000 users for export
+    const { data: users, error } = await getUsers(1, 1000, searchTerm, roleFilter) // Get top 1000 users for export
 
     if (error) throw new Error(error)
 

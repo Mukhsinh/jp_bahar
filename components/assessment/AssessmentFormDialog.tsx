@@ -800,9 +800,13 @@ export default function AssessmentFormDialog({
                         let isQuant = false;
                         (assessment?.sub_assessments || []).forEach(sub => {
                           const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
-                          if (subConf?.measurement_type === 'quantitative') isQuant = true;
-                          const w = (isMedicalUnit || isQuant) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
-                          calcSum += (sub.realization_value || 0) * w
+                          if (subConf?.measurement_type === 'quantitative') {
+                            isQuant = true;
+                            calcSum += sub.score || ((sub.realization_value || 0) * (subConf?.base_index_value || 1))
+                          } else {
+                            const w = (isMedicalUnit || isQuant) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
+                            calcSum += (sub.realization_value || 0) * w
+                          }
                         })
                         achievementPct = calcSum;
                         score = calcSum;

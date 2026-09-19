@@ -918,15 +918,14 @@ export async function generateUserListPDF(users: any[]): Promise<Uint8Array> {
   })
   doc.text(`Dicetak pada: ${dateStr}`, 15, 50)
 
-  const head = [['No', 'Username', 'Nama Lengkap', 'Unit Kerja', 'Kode Unit', 'Role', 'Status']]
+  const head = [['No', 'Username', 'Nama Pegawai', 'Unit', 'Role', 'Password']]
   const body = users.map((u, i) => [
     i + 1,
     u.username || '-',
     u.display_name || u.full_name || '-',
     u.unit_name || '-',
-    u.unit_code || '-',
     u.role_name || u.role || '-',
-    u.is_active ? 'Aktif' : 'Nonaktif'
+    '' // Blank space for writing password physically or later logic
   ])
 
   autoTable(doc, {
@@ -938,12 +937,11 @@ export async function generateUserListPDF(users: any[]): Promise<Uint8Array> {
     styles: { fontSize: 8, cellPadding: 3 },
     columnStyles: {
       0: { cellWidth: 10 },
-      1: { cellWidth: 25 },
-      2: { cellWidth: 40 },
+      1: { cellWidth: 35 },
+      2: { cellWidth: 50 },
       3: { cellWidth: 40 },
-      4: { cellWidth: 20 },
-      5: { cellWidth: 25 },
-      6: { cellWidth: 20, halign: 'center' }
+      4: { cellWidth: 30 },
+      5: { cellWidth: 25 }
     }
   })
 

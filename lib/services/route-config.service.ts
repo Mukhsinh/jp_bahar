@@ -38,7 +38,7 @@ export const routeConfigs: RouteConfig[] = [
   },
   {
     path: '/pool',
-    allowedRoles: ['superadmin'],
+    allowedRoles: ['superadmin', 'unit_manager'],
     description: 'Pool management'
   },
   {
@@ -71,7 +71,7 @@ export const routeConfigs: RouteConfig[] = [
   },
   {
     path: '/notifications',
-    allowedRoles: ['superadmin', 'unit_manager'],
+    allowedRoles: ['superadmin'],
     description: 'Notifications'
   }
 ]

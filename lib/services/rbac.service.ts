@@ -159,7 +159,7 @@ export const routePermissions: RoutePermission[] = [
   {
     path: '/notifications',
     permissions: ['profile:read'],
-    roles: ['superadmin', 'unit_manager', 'employee'],
+    roles: ['superadmin'],
   },
 ]
 

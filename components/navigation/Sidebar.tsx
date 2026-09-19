@@ -96,7 +96,7 @@ function getMenuItems(role: string): MenuItem[] {
   if (role === 'superadmin') return ALL_MENU_ITEMS
   if (role === 'unit_manager') {
     return ALL_MENU_ITEMS.filter(i =>
-      i && ['dashboard', 'kpi-config', 'assessment', 'reports', 'notifications'].includes(i.id)
+      i && ['dashboard', 'kpi-config', 'pool', 'assessment', 'reports'].includes(i.id)
     )
   }
   return [] // Employees have no access as per requirement
