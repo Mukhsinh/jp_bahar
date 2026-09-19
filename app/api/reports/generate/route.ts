@@ -386,7 +386,7 @@ export async function POST(request: NextRequest) {
       // --- Summary Logic Sync ---
       let empListQuery = supabase
         .from('m_employees')
-        .select('id, unit_id, role, is_active')
+        .select('id, unit_id, role, is_active, m_units(kpi_schema_mode)')
         .neq('role', 'superadmin')
 
       if (effectiveUnitId) {
@@ -406,18 +406,44 @@ export async function POST(request: NextRequest) {
           const assessedEmps = await batchedIn(
             supabase,
             't_kpi_assessments',
-            'employee_id',
+            'employee_id, revenue_type',
             'employee_id',
             unitEmpIds,
             q => {
               let qry = q.eq('period', period)
-              if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+              if (revenueType && revenueType !== 'all') {
+                if (revenueType === 'umum') {
+                  // Fetch both, we'll filter in memory based on unit schema
+                  qry = qry.in('revenue_type', ['umum', 'bpjs'])
+                } else {
+                  qry = qry.eq('revenue_type', revenueType)
+                }
+              }
               return qry
             }
           )
 
-          const uniqueAssessedIds = new Set((assessedEmps || []).map((a: any) => a.employee_id))
-          assessedCount = uniqueAssessedIds.size
+          let validAssessedIds = new Set<string>()
+
+          if (revenueType === 'umum') {
+            const hasUmum = new Set(assessedEmps.filter((a: any) => a.revenue_type === 'umum').map((a: any) => a.employee_id))
+            const hasBpjs = new Set(assessedEmps.filter((a: any) => a.revenue_type === 'bpjs').map((a: any) => a.employee_id))
+
+            unitEmployees?.forEach((emp: any) => {
+              const uData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
+              const isSameSchema = uData?.kpi_schema_mode !== 'different'
+
+              if (hasUmum.has(emp.id)) {
+                validAssessedIds.add(emp.id)
+              } else if (isSameSchema && hasBpjs.has(emp.id)) {
+                validAssessedIds.add(emp.id)
+              }
+            })
+          } else {
+            validAssessedIds = new Set((assessedEmps || []).map((a: any) => a.employee_id))
+          }
+
+          assessedCount = validAssessedIds.size
           console.log(`[Summary] Period ${period}: Found ${assessedCount} unique assessed employees out of ${totalEmployeesInUnit}`)
         } catch (assessErr) {
           console.error('[Summary] Error fetching assessments:', assessErr)
@@ -594,6 +620,18 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     )
   `
 
+  // Determine if we need BPJS fallback for same-schema units when generating UMUM report
+  const needBpjsFallback = revenueType === 'umum'
+
+  // Fetch unit schema modes to identify 'same' schema units
+  let sameSchemaUnitIds: Set<string> = new Set()
+  if (needBpjsFallback) {
+    const { data: unitsSchema } = await supabase.from('m_units').select('id, kpi_schema_mode')
+    unitsSchema?.forEach((u: any) => {
+      if (u.kpi_schema_mode !== 'different') sameSchemaUnitIds.add(u.id)
+    })
+  }
+
   const [allAssessments, subAssessments] = await Promise.all([
     batchedIn(
       supabase,
@@ -620,6 +658,57 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       }
     )
   ])
+
+  // If UMUM report: for employees in same-schema units that have NO UMUM assessments,
+  // fall back to BPJS assessment data so the report stays in sync
+  if (needBpjsFallback && sameSchemaUnitIds.size > 0) {
+    // Find employees with UMUM assessments
+    const empsWithUmumAssessments = new Set(allAssessments.map((a: any) => a.employee_id))
+    const empsWithUmumSubs = new Set(subAssessments.map((a: any) => a.employee_id))
+
+    // Find employees in same-schema units that are MISSING umum assessments
+    const empsMissingUmum = allEmployees
+      .filter((emp: any) => {
+        const unitData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
+        const uId = unitData?.id || emp.unit_id
+        return sameSchemaUnitIds.has(uId) && !empsWithUmumAssessments.has(emp.id) && !empsWithUmumSubs.has(emp.id)
+      })
+      .map((emp: any) => emp.id)
+
+    if (empsMissingUmum.length > 0) {
+      console.log(`[Report] UMUM fallback: ${empsMissingUmum.length} employees in same-schema units missing UMUM assessments, fetching BPJS data as fallback`)
+
+      const [bpjsFallbackMain, bpjsFallbackSub] = await Promise.all([
+        batchedIn(
+          supabase,
+          't_kpi_assessments',
+          mainSelectFields,
+          'employee_id',
+          empsMissingUmum,
+          q => q.eq('period', period).is('sub_indicator_id', null).eq('revenue_type', 'bpjs')
+        ),
+        batchedIn(
+          supabase,
+          't_kpi_assessments',
+          'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value)',
+          'employee_id',
+          empsMissingUmum,
+          q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', 'bpjs')
+        )
+      ])
+
+      // Merge BPJS fallback data into the main arrays
+      if (bpjsFallbackMain.length > 0) {
+        allAssessments.push(...bpjsFallbackMain)
+        console.log(`[Report] UMUM fallback: Added ${bpjsFallbackMain.length} BPJS main assessment rows as fallback`)
+      }
+      if (bpjsFallbackSub.length > 0) {
+        subAssessments.push(...bpjsFallbackSub)
+        console.log(`[Report] UMUM fallback: Added ${bpjsFallbackSub.length} BPJS sub assessment rows as fallback`)
+      }
+    }
+  }
+
 
   console.log(`[Report] Fetched ${allAssessments.length} main and ${subAssessments.length} sub-assessments`)
 

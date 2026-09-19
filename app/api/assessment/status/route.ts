@@ -1,6 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 
+/**
+ * Paginated fetch to bypass Supabase's default 1000-row limit.
+ * Fetches all rows by iterating through pages.
+ */
+async function fetchAllRows(client: any, table: string, selectFields: string, filters: (q: any) => any, pageSize: number = 1000): Promise<any[]> {
+  const allRows: any[] = []
+  let page = 0
+  while (true) {
+    const from = page * pageSize
+    const to = from + pageSize - 1
+    let query = client.from(table).select(selectFields).range(from, to)
+    query = filters(query)
+    const { data, error } = await query
+    if (error) {
+      console.error(`[fetchAllRows] Error fetching ${table} page ${page}:`, error)
+      break
+    }
+    if (data && data.length > 0) {
+      allRows.push(...data)
+      if (data.length < pageSize) break
+      page++
+    } else {
+      break
+    }
+  }
+  return allRows
+}
+
 interface AssessmentStatus {
   employee_id: string
   full_name: string
@@ -39,22 +67,46 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
   const { data: directEmps } = await empQuery.order('full_name')
 
   if (directEmps && directEmps.length > 0) {
-    const { data: indicators } = await supabase
-      .from('m_kpi_indicators')
-      .select('id, m_kpi_categories!inner(unit_id)')
+    // Step 1: Preload kpi unit schemas and active categories
+    const { data: unitsData } = await supabase.from('m_units').select('id, kpi_schema_mode')
+    const unitSchemaMap = new Map((unitsData || []).map((u: any) => [u.id, u.kpi_schema_mode]))
+
+    const { data: categoriesData } = await supabase
+      .from('m_kpi_categories')
+      .select('id, unit_id, revenue_type')
       .eq('is_active', true)
 
-    const indicatorCountMap: Record<string, number> = {}
-    indicators?.forEach((ind: any) => {
-      const uId = ind.m_kpi_categories?.unit_id
-      if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
+    // Filter categories according to the schema logic matching the assessment form
+    const validCategories = (categoriesData || []).filter((c: any) => {
+      const schemaMode = unitSchemaMap.get(c.unit_id)
+      if (schemaMode === 'different') {
+        return c.revenue_type === revenueType || c.revenue_type === 'all' || !c.revenue_type
+      }
+      return c.revenue_type === 'bpjs' || c.revenue_type === 'all' || !c.revenue_type
     })
+    const validCategoryIds = validCategories.map((c: any) => c.id)
+    const catToUnitMap = new Map(validCategories.map((c: any) => [c.id, c.unit_id]))
 
-    const { data: existingAssessments } = await supabase
-      .from('t_kpi_assessments')
-      .select('employee_id, indicator_id')
-      .eq('period', period)
-      .eq('revenue_type', revenueType)
+    let indicatorCountMap: Record<string, number> = {}
+    if (validCategoryIds.length > 0) {
+      const { data: validIndicators } = await supabase
+        .from('m_kpi_indicators')
+        .select('id, category_id')
+        .eq('is_active', true)
+        .in('category_id', validCategoryIds)
+
+      validIndicators?.forEach((ind: any) => {
+        const uId = catToUnitMap.get(ind.category_id) as string
+        if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
+      })
+    }
+
+    const existingAssessments = await fetchAllRows(
+      supabase,
+      't_kpi_assessments',
+      'employee_id, indicator_id',
+      (q: any) => q.eq('period', period).eq('revenue_type', revenueType)
+    )
 
     const assessedCountMap: Record<string, Set<string>> = {}
     existingAssessments?.forEach((ass: any) => {
@@ -63,6 +115,33 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
       }
       assessedCountMap[ass.employee_id].add(ass.indicator_id)
     })
+
+    // BPJS fallback for same-schema units when viewing UMUM:
+    // If an employee in a 'same' schema unit has no UMUM assessments, use BPJS data
+    if (revenueType === 'umum') {
+      const empsMissingUmum = directEmps
+        .filter((emp: any) => {
+          const schemaMode = unitSchemaMap.get(emp.unit_id)
+          return schemaMode !== 'different' && !assessedCountMap[emp.id]
+        })
+        .map((emp: any) => emp.id)
+
+      if (empsMissingUmum.length > 0) {
+        const bpjsFallback = await fetchAllRows(
+          supabase,
+          't_kpi_assessments',
+          'employee_id, indicator_id',
+          (q: any) => q.eq('period', period).eq('revenue_type', 'bpjs').in('employee_id', empsMissingUmum)
+        )
+        bpjsFallback?.forEach((ass: any) => {
+          if (!assessedCountMap[ass.employee_id]) {
+            assessedCountMap[ass.employee_id] = new Set()
+          }
+          assessedCountMap[ass.employee_id].add(ass.indicator_id)
+        })
+      }
+    }
+
 
     result = directEmps
       .filter((emp: any) =>

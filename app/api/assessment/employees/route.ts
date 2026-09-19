@@ -1,6 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 
+/**
+ * Paginated fetch to bypass Supabase's default 1000-row limit.
+ * Fetches all rows by iterating through pages.
+ */
+async function fetchAllRows(client: any, table: string, selectFields: string, filters: (q: any) => any, pageSize: number = 1000): Promise<any[]> {
+  const allRows: any[] = []
+  let page = 0
+  while (true) {
+    const from = page * pageSize
+    const to = from + pageSize - 1
+    let query = client.from(table).select(selectFields).range(from, to)
+    query = filters(query)
+    const { data, error } = await query
+    if (error) {
+      console.error(`[fetchAllRows] Error fetching ${table} page ${page}:`, error)
+      break
+    }
+    if (data && data.length > 0) {
+      allRows.push(...data)
+      if (data.length < pageSize) break
+      page++
+    } else {
+      break
+    }
+  }
+  return allRows
+}
+
 interface AssessmentStatus {
   employee_id: string
   full_name: string
@@ -75,54 +103,20 @@ export async function GET(request: NextRequest) {
     const userRole = currentEmployee.role
     const userUnitId = currentEmployee.unit_id
 
-    // 1. First attempt: Get data from v_assessment_status view
-    let statusQuery = adminClient
-      .from('v_assessment_status')
-      .select('*')
-      .eq('period', period)
+    const revenueType = searchParams.get('revenue_type') || 'bpjs'
+    let employeesData: AssessmentStatus[] = []
 
-    if (userRole === 'unit_manager') {
-      if (!userUnitId) {
-        return NextResponse.json({ error: 'Unit ID not found for manager profile' }, { status: 403 })
-      }
-      statusQuery = statusQuery.eq('unit_id', userUnitId)
-    } else if (userRole === 'superadmin') {
-      if (requestedUnitId && requestedUnitId !== 'all') {
-        statusQuery = statusQuery.eq('unit_id', requestedUnitId)
-      }
-    } else {
-      if (userUnitId && userUnitId !== '0') {
-        statusQuery = statusQuery.eq('unit_id', userUnitId)
-      } else if (userRole !== 'superadmin') {
-        return NextResponse.json({ error: 'Unauthorized access level' }, { status: 403 })
-      }
-    }
+    // 1. Get SUPERADMIN unit ID to exclude
+    const { data: adminUnit } = await adminClient
+      .from('m_units')
+      .select('id')
+      .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
+      .maybeSingle()
+    const adminUnitId = adminUnit?.id
 
-    if (status && ['Belum Dinilai', 'Sebagian', 'Selesai'].includes(status)) {
-      statusQuery = statusQuery.eq('status', status)
-    }
-
-    const { data: rawEmployees, error: statusError } = await statusQuery.order('full_name')
-
-    if (statusError) {
-      console.error('View fetch error:', statusError)
-    }
-
-    let employeesData: AssessmentStatus[] = (rawEmployees || []) as AssessmentStatus[]
-
-    // 2. Fallback: If view returns no rows (e.g. period not yet in t_pool), query m_employees directly!
-    if (employeesData.length === 0) {
-      // Get SUPERADMIN unit ID to exclude
-      const { data: adminUnit } = await adminClient
-        .from('m_units')
-        .select('id')
-        .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
-        .maybeSingle()
-      const adminUnitId = adminUnit?.id
-
-      let empQuery = adminClient
-        .from('m_employees')
-        .select(`
+    let empQuery = adminClient
+      .from('m_employees')
+      .select(`
           id,
           full_name,
           unit_id,
@@ -131,78 +125,125 @@ export async function GET(request: NextRequest) {
             name
           )
         `)
+      .eq('is_active', true)
+      .neq('role', 'superadmin')
+
+    // Exclude SUPERADMIN unit
+    if (adminUnitId) {
+      empQuery = empQuery.neq('unit_id', adminUnitId)
+    }
+
+    if (userRole === 'unit_manager' && userUnitId) {
+      empQuery = empQuery.eq('unit_id', userUnitId)
+    } else if (userRole === 'superadmin' && requestedUnitId && requestedUnitId !== 'all') {
+      empQuery = empQuery.eq('unit_id', requestedUnitId)
+    }
+
+    const { data: directEmps, error: directErr } = await empQuery.order('full_name')
+
+    if (!directErr && directEmps) {
+      // Step 1: Preload kpi unit schemas and active categories
+      const { data: unitsData } = await adminClient.from('m_units').select('id, kpi_schema_mode')
+      const unitSchemaMap = new Map((unitsData || []).map(u => [u.id, u.kpi_schema_mode]))
+
+      const { data: categoriesData } = await adminClient
+        .from('m_kpi_categories')
+        .select('id, unit_id, revenue_type')
         .eq('is_active', true)
-        .neq('role', 'superadmin')
 
-      // Exclude SUPERADMIN unit
-      if (adminUnitId) {
-        empQuery = empQuery.neq('unit_id', adminUnitId)
-      }
+      // Filter categories according to the schema logic matching the assessment form
+      const validCategories = (categoriesData || []).filter(c => {
+        const schemaMode = unitSchemaMap.get(c.unit_id)
+        if (schemaMode === 'different') {
+          return c.revenue_type === revenueType || c.revenue_type === 'all' || !c.revenue_type
+        }
+        return c.revenue_type === 'bpjs' || c.revenue_type === 'all' || !c.revenue_type
+      })
+      const validCategoryIds = validCategories.map(c => c.id)
+      const catToUnitMap = new Map(validCategories.map(c => [c.id, c.unit_id]))
 
-      if (userRole === 'unit_manager' && userUnitId) {
-        empQuery = empQuery.eq('unit_id', userUnitId)
-      } else if (userRole === 'superadmin' && requestedUnitId && requestedUnitId !== 'all') {
-        empQuery = empQuery.eq('unit_id', requestedUnitId)
-      }
-
-      const { data: directEmps, error: directErr } = await empQuery.order('full_name')
-
-      if (!directErr && directEmps) {
-        const revenueType = searchParams.get('revenue_type') || 'bpjs'
-
-        // Get indicator counts per unit
-        const { data: indicators } = await adminClient
+      let indicatorCountMap: Record<string, number> = {}
+      if (validCategoryIds.length > 0) {
+        const { data: validIndicators } = await adminClient
           .from('m_kpi_indicators')
-          .select('id, m_kpi_categories!inner(unit_id)')
+          .select('id, category_id')
           .eq('is_active', true)
+          .in('category_id', validCategoryIds)
 
-        const indicatorCountMap: Record<string, number> = {}
-        indicators?.forEach((ind: any) => {
-          const uId = ind.m_kpi_categories?.unit_id
+        validIndicators?.forEach((ind: any) => {
+          const uId = catToUnitMap.get(ind.category_id) as string
           if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
         })
+      }
 
-        // Get existing assessments for this period and revenue_type
-        const { data: existingAssessments } = await adminClient
-          .from('t_kpi_assessments')
-          .select('employee_id, indicator_id')
-          .eq('period', period)
-          .or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+      // Get existing assessments for this period and revenue_type (paginated to handle >1000 rows)
+      const existingAssessments = await fetchAllRows(
+        adminClient,
+        't_kpi_assessments',
+        'employee_id, indicator_id',
+        (q: any) => q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+      )
 
-        const assessedCountMap: Record<string, Set<string>> = {}
-        existingAssessments?.forEach((ass: any) => {
-          if (!assessedCountMap[ass.employee_id]) {
-            assessedCountMap[ass.employee_id] = new Set()
-          }
-          assessedCountMap[ass.employee_id].add(ass.indicator_id)
-        })
-
-        employeesData = directEmps.map((emp: any) => {
-          const totalInd = indicatorCountMap[emp.unit_id] || 0
-          const assessedInd = assessedCountMap[emp.id]?.size || 0
-          let empStatus = 'Belum Dinilai'
-          if (assessedInd > 0) {
-            empStatus = (totalInd > 0 && assessedInd >= totalInd) ? 'Selesai' : 'Sebagian'
-          }
-          const completionPct = totalInd > 0 ? Math.round((assessedInd / totalInd) * 100) : 0
-
-          return {
-            employee_id: emp.id,
-            full_name: emp.full_name,
-            unit_id: emp.unit_id,
-            unit_name: (emp.m_units as any)?.name || '-',
-            period: period,
-            total_indicators: totalInd,
-            assessed_indicators: assessedInd,
-            status: empStatus,
-            completion_percentage: completionPct,
-            role: emp.role
-          }
-        })
-
-        if (status && ['Belum Dinilai', 'Sebagian', 'Selesai'].includes(status)) {
-          employeesData = employeesData.filter(e => e.status === status)
+      const assessedCountMap: Record<string, Set<string>> = {}
+      existingAssessments?.forEach((ass: any) => {
+        if (!assessedCountMap[ass.employee_id]) {
+          assessedCountMap[ass.employee_id] = new Set()
         }
+        assessedCountMap[ass.employee_id].add(ass.indicator_id)
+      })
+
+      // BPJS fallback for same-schema units when viewing UMUM:
+      // If an employee in a 'same' schema unit has no UMUM assessments, use BPJS data
+      if (revenueType === 'umum') {
+        const empsMissingUmum = directEmps
+          .filter((emp: any) => {
+            const schemaMode = unitSchemaMap.get(emp.unit_id)
+            return schemaMode !== 'different' && !assessedCountMap[emp.id]
+          })
+          .map((emp: any) => emp.id)
+
+        if (empsMissingUmum.length > 0) {
+          const bpjsFallback = await fetchAllRows(
+            adminClient,
+            't_kpi_assessments',
+            'employee_id, indicator_id',
+            (q: any) => q.eq('period', period).eq('revenue_type', 'bpjs').in('employee_id', empsMissingUmum)
+          )
+          bpjsFallback?.forEach((ass: any) => {
+            if (!assessedCountMap[ass.employee_id]) {
+              assessedCountMap[ass.employee_id] = new Set()
+            }
+            assessedCountMap[ass.employee_id].add(ass.indicator_id)
+          })
+        }
+      }
+
+
+      employeesData = directEmps.map((emp: any) => {
+        const totalInd = indicatorCountMap[emp.unit_id] || 0
+        const assessedInd = assessedCountMap[emp.id]?.size || 0
+        let empStatus = 'Belum Dinilai'
+        if (assessedInd > 0) {
+          empStatus = (totalInd > 0 && assessedInd >= totalInd) ? 'Selesai' : 'Sebagian'
+        }
+        const completionPct = totalInd > 0 ? Math.round((assessedInd / totalInd) * 100) : 0
+
+        return {
+          employee_id: emp.id,
+          full_name: emp.full_name,
+          unit_id: emp.unit_id,
+          unit_name: (emp.m_units as any)?.name || '-',
+          period: period,
+          total_indicators: totalInd,
+          assessed_indicators: assessedInd,
+          status: empStatus,
+          completion_percentage: completionPct,
+          role: emp.role
+        }
+      })
+
+      if (status && ['Belum Dinilai', 'Sebagian', 'Selesai'].includes(status)) {
+        employeesData = employeesData.filter(e => e.status === status)
       }
     }
 
