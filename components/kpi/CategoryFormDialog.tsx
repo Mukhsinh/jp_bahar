@@ -107,8 +107,12 @@ export default function CategoryFormDialog({
           newErrors.weight_percentage = 'Bobot harus lebih besar dari 0'
         } else {
           // Check if total weight would exceed 100%
+          const targetRev = revenueType || 'bpjs'
           const otherCategories = existingCategories.filter(
-            c => c.id !== category?.id && c.configuration_style !== 'activity' && c.is_weighted !== false
+            c => c.id !== category?.id &&
+              c.configuration_style !== 'activity' &&
+              c.is_weighted !== false &&
+              (c.revenue_type === targetRev || c.revenue_type === 'all' || !c.revenue_type)
           )
           const otherWeightsSum = otherCategories.reduce((sum, c) => sum + Number(c.weight_percentage), 0)
           const totalWeight = otherWeightsSum + weight
@@ -122,7 +126,10 @@ export default function CategoryFormDialog({
 
     // Check if category type already exists (only for new categories)
     if (!category) {
-      const categoryExists = existingCategories.some(c => c.category === formData.category)
+      const targetRev = revenueType || 'bpjs'
+      const categoryExists = existingCategories.some(
+        c => (c.revenue_type === targetRev || c.revenue_type === 'all' || !c.revenue_type) && c.category === formData.category
+      )
       if (categoryExists) {
         newErrors.category = `Kategori ${formData.category} sudah ada untuk unit ini`
       }
@@ -138,8 +145,12 @@ export default function CategoryFormDialog({
     }
 
     const weight = parseFloat(formData.weight_percentage) || 0
+    const targetRev = revenueType || 'bpjs'
     const otherCategories = existingCategories.filter(
-      c => c.id !== category?.id && c.configuration_style !== 'activity' && c.is_weighted !== false
+      c => c.id !== category?.id &&
+        c.configuration_style !== 'activity' &&
+        c.is_weighted !== false &&
+        (c.revenue_type === targetRev || c.revenue_type === 'all' || !c.revenue_type)
     )
     const otherWeightsSum = otherCategories.reduce((sum, c) => sum + Number(c.weight_percentage), 0)
     const totalWeight = otherWeightsSum + weight
@@ -175,21 +186,19 @@ export default function CategoryFormDialog({
         revenue_type: revenueType || 'bpjs'
       }
 
-      if (category) {
-        // Update existing category
-        const { error } = await supabase
-          .from('m_kpi_categories')
-          .update(data)
-          .eq('id', category.id)
+      const response = await fetch('/api/kpi-config/category', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categoryId: category?.id || null,
+          data
+        })
+      })
 
-        if (error) throw error
-      } else {
-        // Create new category
-        const { error } = await supabase
-          .from('m_kpi_categories')
-          .insert(data)
+      const result = await response.json()
 
-        if (error) throw error
+      if (!response.ok) {
+        throw new Error(result.error || 'Gagal menyimpan kategori')
       }
 
       onSuccess()

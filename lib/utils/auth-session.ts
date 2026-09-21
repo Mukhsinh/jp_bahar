@@ -116,15 +116,18 @@ export function validateSessionData(): boolean {
 export async function handleInvalidRefreshToken(error?: any) {
   if (typeof window === 'undefined') return
 
-  // Prevent clearing storage or logging out on 429 Rate Limit or temporary network errors
+  // Prevent clearing storage or logging out on 429 Rate Limit, 400 Invalid Refresh Token (race conditions), or temporary network errors
   if (
     error?.status === 429 ||
     error?.statusCode === 429 ||
     error?.message?.includes('429') ||
     error?.message?.includes('rate limit') ||
-    error?.message?.includes('Too Many Requests')
+    error?.message?.includes('Too Many Requests') ||
+    error?.status === 400 ||
+    error?.statusCode === 400 ||
+    error?.message?.toLowerCase().includes('invalid refresh token')
   ) {
-    console.warn('[AUTH_STORAGE] Suppressed clearing storage due to 429 Rate Limit')
+    console.warn('[AUTH_STORAGE] Suppressed clearing storage due to rate limit or SSR race condition (400/429)')
     return
   }
 

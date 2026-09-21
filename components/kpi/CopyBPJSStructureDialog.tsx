@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import {
     Dialog,
     DialogContent,
@@ -28,7 +27,6 @@ export default function CopyBPJSStructureDialog({
     unitName,
     onSuccess
 }: CopyBPJSStructureDialogProps) {
-    const supabase = createClient()
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [error, setError] = useState<string>('')
 
@@ -42,129 +40,25 @@ export default function CopyBPJSStructureDialog({
         setError('')
 
         try {
-            // 1. Get BPJS categories for this unit (revenue_type 'bpjs' or 'all')
-            const { data: bpjsCategories, error: catError } = await supabase
-                .from('m_kpi_categories')
-                .select('*')
-                .eq('unit_id', unitId)
-                .in('revenue_type', ['bpjs', 'all'])
+            const response = await fetch('/api/kpi-config/copy-structure', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ unitId })
+            })
 
-            if (catError) throw catError
+            const result = await response.json()
 
-            if (!bpjsCategories || bpjsCategories.length === 0) {
-                setError('Unit ini belum memiliki struktur KPI BPJS Kesehatan untuk disalin.')
-                setIsSubmitting(false)
-                return
+            if (!response.ok) {
+                throw new Error(result.error || 'Gagal menyalin struktur KPI')
             }
 
-            // 2. Remove any existing 'umum' categories for this unit to ensure clean overwrite
-            const { data: existingUmumCats } = await supabase
-                .from('m_kpi_categories')
-                .select('id')
-                .eq('unit_id', unitId)
-                .eq('revenue_type', 'umum')
-
-            if (existingUmumCats && existingUmumCats.length > 0) {
-                const umumCatIds = existingUmumCats.map(c => c.id)
-                await supabase.from('m_kpi_categories').delete().in('id', umumCatIds)
-            }
-
-            // 3. Copy categories with revenue_type = 'umum'
-            const categoryMapping: Record<string, string> = {}
-
-            for (const category of bpjsCategories) {
-                const { data: newCat, error: insertCatError } = await supabase
-                    .from('m_kpi_categories')
-                    .insert({
-                        unit_id: unitId,
-                        category: category.category,
-                        category_name: category.category_name,
-                        weight_percentage: category.weight_percentage,
-                        description: category.description,
-                        configuration_style: category.configuration_style,
-                        is_weighted: category.is_weighted,
-                        is_active: category.is_active,
-                        revenue_type: 'umum'
-                    })
-                    .select()
-                    .single()
-
-                if (insertCatError) throw insertCatError
-                categoryMapping[category.id] = newCat.id
-            }
-
-            // 4. Get BPJS indicators
-            const bpjsCategoryIds = bpjsCategories.map(c => c.id)
-            const { data: bpjsIndicators, error: indError } = await supabase
-                .from('m_kpi_indicators')
-                .select('*')
-                .in('category_id', bpjsCategoryIds)
-
-            if (indError) throw indError
-
-            const indicatorMapping: Record<string, string> = {}
-
-            if (bpjsIndicators && bpjsIndicators.length > 0) {
-                for (const indicator of bpjsIndicators) {
-                    const { data: newInd, error: insertIndError } = await supabase
-                        .from('m_kpi_indicators')
-                        .insert({
-                            category_id: categoryMapping[indicator.category_id],
-                            code: indicator.code,
-                            name: indicator.name,
-                            target_value: indicator.target_value,
-                            weight_percentage: indicator.weight_percentage,
-                            measurement_unit: indicator.measurement_unit,
-                            description: indicator.description,
-                            calculation_method: indicator.calculation_method,
-                            base_index_value: indicator.base_index_value,
-                            is_active: indicator.is_active,
-                            measurement_type: indicator.measurement_type,
-                            unit_tariff: indicator.unit_tariff,
-                            basic_index_value: indicator.basic_index_value,
-                            service_types: indicator.service_types
-                        })
-                        .select()
-                        .single()
-
-                    if (insertIndError) throw insertIndError
-                    indicatorMapping[indicator.id] = newInd.id
-                }
-
-                // 5. Get BPJS sub-indicators
-                const bpjsIndicatorIds = bpjsIndicators.map(i => i.id)
-                const { data: bpjsSubIndicators } = await supabase
-                    .from('m_kpi_sub_indicators')
-                    .select('*')
-                    .in('indicator_id', bpjsIndicatorIds)
-
-                if (bpjsSubIndicators && bpjsSubIndicators.length > 0) {
-                    const subToInsert = bpjsSubIndicators.map(sub => ({
-                        indicator_id: indicatorMapping[sub.indicator_id],
-                        code: sub.code,
-                        name: sub.name,
-                        target_value: sub.target_value,
-                        weight_percentage: sub.weight_percentage,
-                        scoring_criteria: sub.scoring_criteria,
-                        measurement_unit: sub.measurement_unit,
-                        description: sub.description,
-                        is_active: sub.is_active
-                    }))
-
-                    const { error: insertSubError } = await supabase
-                        .from('m_kpi_sub_indicators')
-                        .insert(subToInsert)
-
-                    if (insertSubError) throw insertSubError
-                }
-            }
-
-            alert('Struktur KPI dari BPJS Kesehatan berhasil disalin ke Pendapatan Umum!')
+            alert(result.message || 'Struktur KPI dari BPJS Kesehatan berhasil disalin ke Pendapatan Umum!')
             onSuccess()
             onOpenChange(false)
         } catch (err: any) {
             console.error('Error copying BPJS structure to UMUM:', err)
-            setError(err.message || 'Gagal menyalin struktur KPI')
+            const errorMsg = err?.message || 'Gagal menyalin struktur KPI'
+            setError(errorMsg)
         } finally {
             setIsSubmitting(false)
         }

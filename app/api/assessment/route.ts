@@ -400,14 +400,81 @@ export async function POST(request: NextRequest) {
 
       // If applyToUmum is enabled and current item is for bpjs, also copy to 'umum'
       if (applyToUmum && (assessmentItem.revenue_type === 'bpjs' || !assessmentItem.revenue_type)) {
-        const copyItem: Assessment = {
-          ...assessmentItem,
-          id: undefined, // Let upsert find or create the UMUM record
-          revenue_type: 'umum',
-          sub_assessments: assessmentItem.sub_assessments?.map((s: any) => ({ ...s, id: undefined }))
+        // Fetch unit schema mode for this employee
+        const { data: empUnitData } = await adminClient
+          .from('m_employees')
+          .select('unit_id, m_units(kpi_schema_mode)')
+          .eq('id', assessmentItem.employee_id)
+          .maybeSingle()
+
+        const uData = Array.isArray(empUnitData?.m_units) ? empUnitData.m_units[0] : empUnitData?.m_units
+        const schemaMode = uData?.kpi_schema_mode || 'same'
+
+        if (schemaMode === 'different' && empUnitData?.unit_id) {
+          // Find target UMUM indicator corresponding to BPJS indicator
+          const { data: bpjsInd } = await adminClient
+            .from('m_kpi_indicators')
+            .select('code, name, m_kpi_categories(category, category_name)')
+            .eq('id', assessmentItem.indicator_id)
+            .maybeSingle()
+
+          if (bpjsInd) {
+            const catCode = (bpjsInd as any).m_kpi_categories?.category
+            const { data: umumCat } = await adminClient
+              .from('m_kpi_categories')
+              .select('id')
+              .eq('unit_id', empUnitData.unit_id)
+              .eq('revenue_type', 'umum')
+              .eq('category', catCode)
+              .maybeSingle()
+
+            if (umumCat) {
+              const { data: umumInd } = await adminClient
+                .from('m_kpi_indicators')
+                .select('id')
+                .eq('category_id', umumCat.id)
+                .eq('code', bpjsInd.code)
+                .maybeSingle()
+
+              if (umumInd) {
+                let mappedSubAssessments = assessmentItem.sub_assessments
+                if (Array.isArray(assessmentItem.sub_assessments) && assessmentItem.sub_assessments.length > 0) {
+                  const { data: umumSubs } = await adminClient
+                    .from('m_kpi_sub_indicators')
+                    .select('id, code')
+                    .eq('indicator_id', umumInd.id)
+
+                  const subCodeMap = new Map((umumSubs || []).map((s: any) => [s.code, s.id]))
+                  mappedSubAssessments = assessmentItem.sub_assessments.map((s: any) => ({
+                    ...s,
+                    id: undefined,
+                    sub_indicator_id: subCodeMap.get(s.code) || s.sub_indicator_id
+                  }))
+                }
+
+                const copyItem: Assessment = {
+                  ...assessmentItem,
+                  id: undefined,
+                  indicator_id: umumInd.id,
+                  revenue_type: 'umum',
+                  sub_assessments: mappedSubAssessments?.map((s: any) => ({ ...s, id: undefined }))
+                }
+                const savedUmum = await upsertAssessment(adminClient, copyItem)
+                results.push(savedUmum)
+              }
+            }
+          }
+        } else {
+          // Standard 'same' schema mode: same indicator_id
+          const copyItem: Assessment = {
+            ...assessmentItem,
+            id: undefined,
+            revenue_type: 'umum',
+            sub_assessments: assessmentItem.sub_assessments?.map((s: any) => ({ ...s, id: undefined }))
+          }
+          const savedUmum = await upsertAssessment(adminClient, copyItem)
+          results.push(savedUmum)
         }
-        const savedUmum = await upsertAssessment(adminClient, copyItem)
-        results.push(savedUmum)
       }
     }
 

@@ -116,13 +116,12 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
       assessedCountMap[ass.employee_id].add(ass.indicator_id)
     })
 
-    // BPJS fallback for same-schema units when viewing UMUM:
-    // If an employee in a 'same' schema unit has no UMUM assessments, use BPJS data
+    // BPJS fallback when viewing UMUM:
+    // If an employee has no UMUM assessments (regardless of unit schema style), use BPJS data
     if (revenueType === 'umum') {
       const empsMissingUmum = directEmps
         .filter((emp: any) => {
-          const schemaMode = unitSchemaMap.get(emp.unit_id)
-          return schemaMode !== 'different' && !assessedCountMap[emp.id]
+          return !assessedCountMap[emp.id]
         })
         .map((emp: any) => emp.id)
 

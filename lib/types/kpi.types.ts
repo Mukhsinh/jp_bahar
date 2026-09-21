@@ -10,6 +10,7 @@ export interface KPICategory {
   is_active: boolean
   configuration_style?: 'percentage' | 'activity' | null
   is_weighted?: boolean
+  revenue_type?: 'bpjs' | 'umum' | 'all' | string | null
 }
 
 export interface KPIIndicator {

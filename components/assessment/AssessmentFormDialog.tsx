@@ -498,7 +498,10 @@ export default function AssessmentFormDialog({
           const saveResponse = await fetch('/api/assessment', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(batchData)
+            body: JSON.stringify({
+              assessments: batchData,
+              apply_to_umum: activeRevenueType === 'bpjs' ? applyToUmum : false
+            })
           })
 
           if (!saveResponse.ok) {

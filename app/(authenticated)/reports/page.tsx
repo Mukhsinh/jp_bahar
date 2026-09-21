@@ -355,7 +355,13 @@ export default function ReportsPage() {
       })
       const data = await response.json()
 
-      if (!response.ok) throw new Error(data.error || 'Gagal membuat laporan')
+      if (!response.ok) {
+        if (response.status === 401) {
+          window.location.href = '/login?error=session_expired'
+          return
+        }
+        throw new Error(data.error || 'Gagal membuat laporan')
+      }
 
       // Capture summary from API
       if (data.summary) {
