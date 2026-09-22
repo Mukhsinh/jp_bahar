@@ -664,9 +664,15 @@ export default function AssessmentFormDialog({
                 // For unweighted, the "contribution" is just the average achievement percentage
                 kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * 100
               }
+            } else {
+              if (category.is_weighted !== false) {
+                kontribusiAkhir = totalRealisasiKategori * (porsiKategori / 100)
+              } else {
+                kontribusiAkhir = totalRealisasiKategori
+              }
             }
 
-            const poinAkhir = isMedicalUnit || totalTargetKategori === 0 ? totalRealisasiKategori : kontribusiAkhir;
+            const poinAkhir = isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir;
             totalSkorIndeks += poinAkhir;
 
             return (
@@ -680,9 +686,11 @@ export default function AssessmentFormDialog({
                   </Badge>
                 </CardHeader>
                 <CardContent className="py-0 px-3 pb-2">
-                  <div className="text-base font-bold text-gray-900 flex items-end">
-                    {totalRealisasiKategori.toFixed(2)}
-                    <span className="text-xs font-medium text-gray-500 ml-1 mb-[1px]">/ {totalTargetKategori.toFixed(2)}</span>
+                  <div className="text-base font-bold text-gray-900">
+                    {poinAkhir.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-gray-400">
+                    {totalRealisasiKategori.toFixed(2)} / {totalTargetKategori.toFixed(2)}
                   </div>
                 </CardContent>
               </Card>
@@ -817,7 +825,8 @@ export default function AssessmentFormDialog({
 
                       let displayedScore = score
                       if (!isMedicalUnit && category.is_weighted !== false && indicator.calculation_method !== 'priority') {
-                        displayedScore = score * (indicator.weight_percentage / 100)
+                        const catWeight = category.weight_percentage || 0
+                        displayedScore = score * (indicator.weight_percentage / 100) * (catWeight / 100)
                       }
 
                       return (

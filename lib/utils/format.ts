@@ -29,12 +29,14 @@ export function formatNumber(value: number | string, decimals: number = 0): stri
  * @param maxDecimals - Maximum decimal places (default: 4)
  * @returns Formatted string
  */
-export function formatDecimal(value: number | string, maxDecimals: number = 4): string {
+export function formatDecimal(value: number | string, maxDecimals: number = 4, minDecimals?: number): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
   if (isNaN(num)) return '0'
 
+  const min = minDecimals !== undefined ? minDecimals : (num > 0 && num < 100 && num % 1 !== 0 ? 4 : 0)
+
   return new Intl.NumberFormat('id-ID', {
-    minimumFractionDigits: 0,
+    minimumFractionDigits: min,
     maximumFractionDigits: maxDecimals,
   }).format(num)
 }

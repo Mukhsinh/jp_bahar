@@ -865,12 +865,18 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         const cat = (a.m_kpi_indicators?.m_kpi_categories?.category || '').trim().toUpperCase()
         return cat === targetCat || cat.startsWith(targetCat)
       })
-      let indexScore = 0
-      let priorityScore = 0
 
       if (catAssessments.length === 0) {
         return { indexScore: 0, priorityScore: 0 }
       }
+
+      const firstCatObj = catAssessments[0]?.m_kpi_indicators?.m_kpi_categories
+      const categoryWeight = parseFloat(firstCatObj?.weight_percentage) || 0
+      const isWeightedCategory = firstCatObj?.is_weighted !== false
+
+      let totalRealisasiKategori = 0
+      let totalTargetKategori = 0
+      let priorityScore = 0
 
       for (const a of catAssessments) {
         // Mark as processed so we don't count it again in "others"
@@ -926,6 +932,10 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
           priorityScore += activityValue
         }
 
+        const detailScore = (!isMedicalUnit && isWeightedCategory && !isActivity)
+          ? indicatorScore * (indWeight / 100) * (categoryWeight / 100)
+          : indicatorScore
+
         // Track detail for slip
         assessmentDetails.push({
           name: indName,
@@ -933,7 +943,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
           weight: indWeight,
           target: indTarget,
           realization: indRealization,
-          score: indicatorScore,
+          score: detailScore,
           basic_value: basicVal,
           calculation_method: calcMethod,
           is_weighted: !isActivity,
@@ -945,11 +955,33 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         if (isActivity) {
           totalActivityRupiah = Number(totalActivityRupiah) + Number(activityValue)
         } else {
-          // Because indicatorScore is already properly weighted out of the category maximum,
-          // we strictly just sum it to get the final accurate score. No category fraction math needed.
-          indexScore += indicatorScore
+          if (isWeightedCategory) {
+            totalRealisasiKategori += (indicatorScore * (indWeight / 100))
+            totalTargetKategori += (indTarget * (indWeight / 100))
+          } else {
+            const ach = indTarget > 0 ? (indicatorScore / indTarget) * 100 : indicatorScore
+            totalRealisasiKategori += ach
+            totalTargetKategori += 100
+          }
         }
       }
+
+      let kontribusiAkhir = 0
+      if (totalTargetKategori > 0) {
+        if (isWeightedCategory) {
+          kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * categoryWeight
+        } else {
+          kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * 100
+        }
+      } else {
+        if (isWeightedCategory) {
+          kontribusiAkhir = totalRealisasiKategori * (categoryWeight / 100)
+        } else {
+          kontribusiAkhir = totalRealisasiKategori
+        }
+      }
+
+      const indexScore = isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir
 
       return { indexScore, priorityScore }
     }

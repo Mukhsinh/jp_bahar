@@ -92,7 +92,11 @@ export default function SubIndicatorFormDialog({
                 ],
                 measurement_type: (subIndicator.measurement_type as any) || 'scoring',
                 unit_tariff: subIndicator.unit_tariff?.toString() || '',
-                base_index_value: subIndicator.base_index_value?.toString() || '',
+                base_index_value: subIndicator.base_index_value !== undefined && subIndicator.base_index_value !== null
+                    ? (Number(subIndicator.base_index_value) < 100 && Number(subIndicator.base_index_value) % 1 !== 0
+                        ? Number(subIndicator.base_index_value).toFixed(4)
+                        : subIndicator.base_index_value.toString())
+                    : '',
                 service_types: subIndicator.service_types || []
             })
         } else {
