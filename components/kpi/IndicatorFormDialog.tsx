@@ -200,7 +200,8 @@ export default function IndicatorFormDialog({
   function updateScoringCriterion(index: number, field: 'score' | 'label', value: string | number) {
     const newCriteria = [...formData.scoring_criteria]
     if (field === 'score') {
-      newCriteria[index].score = typeof value === 'string' ? parseFloat(value) || 0 : value
+      const parsed = typeof value === 'string' ? parseFloat(value) : value
+      newCriteria[index].score = isNaN(parsed) ? 0 : parsed
     } else {
       newCriteria[index].label = value.toString()
     }
@@ -247,7 +248,7 @@ export default function IndicatorFormDialog({
     }
 
     if (formData.calculation_method === 'priority' || category?.configuration_style === 'activity') {
-      if (!formData.indicator_base_value || parseFloat(formData.indicator_base_value) <= 0) {
+      if (formData.measurement_type === 'quantitative' && (!formData.indicator_base_value || parseFloat(formData.indicator_base_value) <= 0)) {
         newErrors.indicator_base_value = 'Tarif dasar wajib diisi dan lebih besar dari 0'
       }
     }
@@ -258,8 +259,8 @@ export default function IndicatorFormDialog({
           newErrors.scoring_criteria = 'Minimal harus ada satu kriteria penilaian'
         } else {
           formData.scoring_criteria.forEach((criterion, index) => {
-            if (isNaN(criterion.score) || criterion.score < 0) {
-              newErrors[`score_${index}`] = `Skor kriteria ${index + 1} harus berupa angka positif`
+            if (isNaN(criterion.score)) {
+              newErrors[`score_${index}`] = `Skor kriteria ${index + 1} harus berupa angka valid`
             }
             if (!criterion.label.trim()) {
               newErrors[`label_${index}`] = `Label kriteria ${index + 1} wajib diisi`

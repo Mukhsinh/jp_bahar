@@ -657,50 +657,63 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     )
   ])
 
-  // If UMUM report: for employees that have NO UMUM assessments (regardless of unit schema style),
-  // fall back to BPJS assessment data so the report stays in sync with user expectations
-  if (needBpjsFallback && allUnitIds.size > 0) {
-    // Find employees with UMUM assessments
-    const empsWithUmumAssessments = new Set(allAssessments.map((a: any) => a.employee_id))
-    const empsWithUmumSubs = new Set(subAssessments.map((a: any) => a.employee_id))
+  // Bidirectional fallback between UMUM and BPJS:
+  // If generating report for one revenue type (e.g. BPJS or UMUM), for employees or indicators
+  // that have NO assessment in that revenue type (or have priority/potongan assessments saved in the other revenue type),
+  // fetch assessment data from the opposite revenue type as a fallback so calculations are accurate.
+  const oppositeRevenue = revenueType === 'bpjs' ? 'umum' : revenueType === 'umum' ? 'bpjs' : null
 
-    // Find employees that are MISSING umum assessments
-    const empsMissingUmum = allEmployees
-      .filter((emp: any) => {
-        return !empsWithUmumAssessments.has(emp.id) && !empsWithUmumSubs.has(emp.id)
-      })
-      .map((emp: any) => emp.id)
+  if (oppositeRevenue && allEmployees && allEmployees.length > 0) {
+    const mainKeySet = new Set(allAssessments.map((a: any) => `${a.employee_id}:${a.indicator_id}`))
+    const subKeySet = new Set(subAssessments.map((a: any) => `${a.employee_id}:${a.indicator_id}:${a.sub_indicator_id}`))
 
-    if (empsMissingUmum.length > 0) {
-      console.log(`[Report] UMUM fallback: ${empsMissingUmum.length} employees missing UMUM assessments, fetching BPJS data as fallback`)
+    const [oppositeMain, oppositeSub] = await Promise.all([
+      batchedIn(
+        supabase,
+        't_kpi_assessments',
+        mainSelectFields,
+        'employee_id',
+        empIds,
+        q => q.eq('period', period).is('sub_indicator_id', null).eq('revenue_type', oppositeRevenue)
+      ),
+      batchedIn(
+        supabase,
+        't_kpi_assessments',
+        'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
+        'employee_id',
+        empIds,
+        q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', oppositeRevenue)
+      )
+    ])
 
-      const [bpjsFallbackMain, bpjsFallbackSub] = await Promise.all([
-        batchedIn(
-          supabase,
-          't_kpi_assessments',
-          mainSelectFields,
-          'employee_id',
-          empsMissingUmum,
-          q => q.eq('period', period).is('sub_indicator_id', null).eq('revenue_type', 'bpjs')
-        ),
-        batchedIn(
-          supabase,
-          't_kpi_assessments',
-          'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
-          'employee_id',
-          empsMissingUmum,
-          q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', 'bpjs')
-        )
-      ])
+    // 1. Add main assessments from opposite revenue type if missing or if opposite has non-zero priority deduction
+    for (const opp of oppositeMain) {
+      const key = `${opp.employee_id}:${opp.indicator_id}`
+      const existingIdx = allAssessments.findIndex((a: any) => `${a.employee_id}:${a.indicator_id}` === key)
 
-      // Merge BPJS fallback data into the main arrays
-      if (bpjsFallbackMain.length > 0) {
-        allAssessments.push(...bpjsFallbackMain)
-        console.log(`[Report] UMUM fallback: Added ${bpjsFallbackMain.length} BPJS main assessment rows as fallback`)
+      if (existingIdx === -1) {
+        allAssessments.push(opp)
+      } else {
+        // If existing assessment has 0 realization but opposite has non-zero realization (e.g. potongan), override/use fallback
+        const existing = allAssessments[existingIdx]
+        if (Number(existing.realization_value || 0) === 0 && Number(opp.realization_value || 0) !== 0) {
+          allAssessments[existingIdx] = opp
+        }
       }
-      if (bpjsFallbackSub.length > 0) {
-        subAssessments.push(...bpjsFallbackSub)
-        console.log(`[Report] UMUM fallback: Added ${bpjsFallbackSub.length} BPJS sub assessment rows as fallback`)
+    }
+
+    // 2. Add sub assessments from opposite revenue type if missing or if opposite has non-zero realization
+    for (const oppSub of oppositeSub) {
+      const key = `${oppSub.employee_id}:${oppSub.indicator_id}:${oppSub.sub_indicator_id}`
+      const existingIdx = subAssessments.findIndex((a: any) => `${a.employee_id}:${a.indicator_id}:${a.sub_indicator_id}` === key)
+
+      if (existingIdx === -1) {
+        subAssessments.push(oppSub)
+      } else {
+        const existing = subAssessments[existingIdx]
+        if (Number(existing.realization_value || 0) === 0 && Number(oppSub.realization_value || 0) !== 0) {
+          subAssessments[existingIdx] = oppSub
+        }
       }
     }
   }
@@ -759,6 +772,10 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     allAssessments = allAssessments.filter((a: any) => {
       const info = empUnitMap.get(a.employee_id)
       if (!info) return true
+      const isPriority = a.m_kpi_indicators?.calculation_method === 'priority'
+      const hasRealization = Math.abs(Number(a.realization_value || 0)) > 0
+      if (isPriority || hasRealization) return true
+
       const targetRev = a.revenue_type || revenueType
       const validSet = getActiveIndicatorSet(info.unitId, info.schemaMode, targetRev)
       return validSet.size === 0 || validSet.has(a.indicator_id)
@@ -767,6 +784,9 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     subAssessments = subAssessments.filter((s: any) => {
       const info = empUnitMap.get(s.employee_id)
       if (!info) return true
+      const isPriority = s.m_kpi_sub_indicators?.measurement_type === 'quantitative' || Math.abs(Number(s.realization_value || 0)) > 0
+      if (isPriority) return true
+
       const targetRev = s.revenue_type || revenueType
       const validSet = getActiveIndicatorSet(info.unitId, info.schemaMode, targetRev)
       return validSet.size === 0 || validSet.has(s.indicator_id)
@@ -806,18 +826,33 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       const tariff = Number(sub.m_kpi_sub_indicators?.base_index_value || 1);
       const realScore = Number(sub.realization_value || 0) * tariff;
 
-      // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and tariff > 1)
-      if (realScore > 0 && effectiveScore !== realScore && tariff > 1) {
+      // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and Math.abs(tariff) > 1)
+      if (Math.abs(realScore) > 0 && effectiveScore !== realScore && Math.abs(tariff) > 1) {
+        effectiveScore = realScore;
+      }
+
+      // Fallback for priority activity types saved incorrectly as 0
+      if (effectiveScore === 0 && Math.abs(realScore) > 0) {
         effectiveScore = realScore;
       }
     } else {
       // Re-hydrate qualitative (scoring) metric manually
       const weight = Number(sub.m_kpi_sub_indicators?.weight_percentage || 0)
 
+      const mainAsses = allAssessments?.find((a: any) => a.employee_id === sub.employee_id && a.indicator_id === sub.indicator_id)
+      const isPriority = mainAsses?.m_kpi_indicators?.calculation_method === 'priority'
+
       // If it's a Medical Unit or quantitative, weight acts as 1.
       // Otherwise strictly adhere to weight, so a 0-weight item yields 0.
-      if (effectiveScore === 0 && Number(sub.realization_value) > 0) {
-        effectiveScore = Number(sub.realization_value) * (isMed ? 1 : (weight / 100))
+      if (effectiveScore === 0 && Math.abs(Number(sub.realization_value)) > 0) {
+        if (isPriority) {
+          const subBase = Number(sub.m_kpi_sub_indicators?.base_index_value || 0)
+          const mainBase = Number(mainAsses?.m_kpi_indicators?.base_index_value || 0)
+          const baseIndex = subBase !== 0 ? subBase : (mainBase !== 0 ? mainBase : 1)
+          effectiveScore = Number(sub.realization_value) * baseIndex
+        } else {
+          effectiveScore = Number(sub.realization_value) * (isMed ? 1 : (weight / 100))
+        }
       }
     }
 
@@ -856,6 +891,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     const empAssessments = Array.from(uniqueMap.values())
 
     let totalActivityRupiah = 0
+    let totalDeductionRupiah = 0
     const assessmentDetails: any[] = []
     const processedIndices = new Set<string>()
 
@@ -893,30 +929,25 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         const isPriority = calcMethod === 'priority'
         const isActivity = isPriority
 
-        // Resolve effective score: prefer sub-assessment aggregate, fallback to main row score, tariff product, or computed achievement
+        // Resolve effectiveScore: prefer sub-assessment aggregate, else if activity use volume*tariff, else fallback
         let effectiveScore: number
         const subKey = `${empId}:${a.indicator_id}`
         const subAgg = subScoreMap.get(subKey)
 
         if (subAgg !== undefined) {
           effectiveScore = subAgg.score
-        } else if (rawScore !== null && rawScore !== undefined && parseFloat(rawScore) >= 0) {
-          if (isActivity && basicVal > 1 && parseFloat(rawScore) === indRealization) {
-            // Legacy bug where parent row score recorded only volume instead of multiplied tariff
-            effectiveScore = indRealization * basicVal
-          } else {
-            effectiveScore = parseFloat(rawScore)
+        } else if (isActivity) {
+          effectiveScore = indRealization * basicVal
+        } else if (rawScore !== null && rawScore !== undefined && !isNaN(parseFloat(rawScore))) {
+          effectiveScore = parseFloat(rawScore)
 
-            // Workaround: PostgreSQL generated score evaluates to 0 if target=0 (e.g. Qualitative indicators)
-            // The frontend mathematically rebuilds the score using realization_value * weight
-            if (effectiveScore === 0 && indRealization > 0) {
-              if (indTarget === 0) {
-                effectiveScore = indRealization * (isMedicalUnit ? 1 : (indWeight / 100))
-              }
+          // Workaround: PostgreSQL generated score evaluates to 0 if target=0 (e.g. Qualitative indicators)
+          // The frontend mathematically rebuilds the score using realization_value * weight
+          if (effectiveScore === 0 && indRealization > 0) {
+            if (indTarget === 0) {
+              effectiveScore = indRealization * (isMedicalUnit ? 1 : (indWeight / 100))
             }
           }
-        } else if (basicVal > 1) {
-          effectiveScore = indRealization * basicVal
         } else if (indTarget > 0) {
           const achPct = Math.min(100, (indRealization / indTarget) * 100)
           effectiveScore = isMedicalUnit ? achPct : (achPct * (indWeight / 100))
@@ -926,13 +957,15 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
         const indicatorScore = effectiveScore
 
+        const isDeduction = indicatorScore < 0
+
         let activityValue = 0
-        if (isActivity) {
+        if (isPriority && !isDeduction) {
           activityValue = indicatorScore
           priorityScore += activityValue
         }
 
-        const detailScore = (!isMedicalUnit && isWeightedCategory && !isActivity)
+        const detailScore = (!isMedicalUnit && isWeightedCategory && !isPriority)
           ? indicatorScore * (indWeight / 100) * (categoryWeight / 100)
           : indicatorScore
 
@@ -946,13 +979,16 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
           score: detailScore,
           basic_value: basicVal,
           calculation_method: calcMethod,
-          is_weighted: !isActivity,
-          is_activity: isActivity,
+          is_weighted: !isPriority,
+          is_activity: isPriority,
           activity_value: activityValue,
-          is_priority: isPriority
+          is_priority: isPriority,
+          is_deduction: isDeduction
         })
 
-        if (isActivity) {
+        if (isDeduction) {
+          totalDeductionRupiah = Number(totalDeductionRupiah) + Math.abs(Number(indicatorScore))
+        } else if (isPriority) {
           totalActivityRupiah = Number(totalActivityRupiah) + Number(activityValue)
         } else {
           if (isWeightedCategory) {
@@ -1024,12 +1060,13 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       total_priority_score,
       totalScore: Number((p1 + p2 + p3).toFixed(2)),
       totalActivityRupiah: Number(totalActivityRupiah),
+      totalDeductionRupiah: Number(totalDeductionRupiah),
       assessmentDetails
     }
   }
 
   // --- First pass: calculate ALL employee scores and unit totals ---
-  const employeeScoresMap = new Map<string, { emp: any; p1: number; p2: number; p3: number; p1_priority: number; p2_priority: number; p3_priority: number; total_priority_score: number; totalScore: number; totalActivityRupiah: number; assessmentDetails: any[] }>()
+  const employeeScoresMap = new Map<string, { emp: any; p1: number; p2: number; p3: number; p1_priority: number; p2_priority: number; p3_priority: number; total_priority_score: number; totalScore: number; totalActivityRupiah: number; totalDeductionRupiah: number; assessmentDetails: any[] }>()
   const unitTotalScoresMap = new Map<string, number>()
   const unitTotalActivityMap = new Map<string, number>()
   const unitEmployeeCountMap = new Map<string, number>()
@@ -1113,6 +1150,38 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     )
   }
 
+  // --- Pre-compute unit total deductions and redistribution per unit ---
+  const unitTotalDeductionMap = new Map<string, number>()
+  const unitDeductedEmpCountMap = new Map<string, number>()
+  const unitTotalEmpCountMap = new Map<string, number>()
+
+  for (const [empId, data] of employeeScoresMap.entries()) {
+    const unitData = Array.isArray(data.emp.m_units) ? data.emp.m_units[0] : data.emp.m_units
+    const uId = unitData?.id
+    if (!uId) continue
+
+    const ded = Number(data.totalDeductionRupiah || 0)
+    unitTotalEmpCountMap.set(uId, (unitTotalEmpCountMap.get(uId) || 0) + 1)
+
+    if (ded > 0) {
+      unitTotalDeductionMap.set(uId, (unitTotalDeductionMap.get(uId) || 0) + ded)
+      unitDeductedEmpCountMap.set(uId, (unitDeductedEmpCountMap.get(uId) || 0) + 1)
+    }
+  }
+
+  const unitDistribusiPotonganPersonMap = new Map<string, number>()
+  for (const [uId, totalEmp] of unitTotalEmpCountMap.entries()) {
+    const totalDeduction = unitTotalDeductionMap.get(uId) || 0
+    const deductedEmpCount = unitDeductedEmpCountMap.get(uId) || 0
+    const nonDeductedEmpCount = totalEmp - deductedEmpCount
+
+    if (totalDeduction > 0 && nonDeductedEmpCount > 0) {
+      unitDistribusiPotonganPersonMap.set(uId, totalDeduction / nonDeductedEmpCount)
+    } else {
+      unitDistribusiPotonganPersonMap.set(uId, 0)
+    }
+  }
+
   // --- Second pass: Calculate Gross/Net incentive per employee ---
   const report = []
 
@@ -1129,7 +1198,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
   for (const [empId, data] of employeeScoresMap.entries()) {
     if (!reportEmployeeIds.has(empId)) continue
 
-    const { emp, p1, p2, p3, p1_priority, p2_priority, p3_priority, total_priority_score, totalScore, totalActivityRupiah, assessmentDetails } = data
+    const { emp, p1, p2, p3, p1_priority, p2_priority, p3_priority, total_priority_score, totalScore, totalActivityRupiah, totalDeductionRupiah, assessmentDetails } = data
 
     // Relaxed condition: Include employee if they were fetched in our assessment queries.
     // If they were in empIds and we fetched something (main or sub), they should be here.
@@ -1148,9 +1217,18 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
     const isMedical = isMedicalUnit(uId, unitName)
 
-    // Formula: (Total Indeks x PIR) + Insentif Berbasis Prioritas
+    // Formula: (Total Indeks x PIR) + Insentif Berbasis Prioritas + Distribusi Potongan Unit - Potongan
     const indexIncentive = totalScore * pir
-    let grossIncentive = Number(indexIncentive) + Number(totalActivityRupiah)
+    const positiveActivity = Number(totalActivityRupiah)
+    const deductionAmount = Number(totalDeductionRupiah || 0)
+
+    // Calculate equal redistribution of unit deductions for non-deducted employees
+    let meDistribusiPotongan = 0
+    if (deductionAmount === 0 && uId) {
+      meDistribusiPotongan = unitDistribusiPotonganPersonMap.get(uId) || 0
+    }
+
+    let grossIncentiveBeforeDeduction = Number(indexIncentive) + positiveActivity + meDistribusiPotongan
 
     let guaranteeFee = 0
     if (isMedical) {
@@ -1163,8 +1241,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         .maybeSingle()
 
       guaranteeFee = Number(doctorMaster?.pagu_guarantee_fee || 0)
-      grossIncentive += guaranteeFee
+      grossIncentiveBeforeDeduction += guaranteeFee
     }
+
+    // Direct deduction from gross incentive
+    const grossIncentive = Math.max(0, grossIncentiveBeforeDeduction - deductionAmount)
 
     // PPh 21
     const taxCheck = calculatePPh21(
@@ -1213,14 +1294,16 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       p1_priority: p1_priority || 0,
       p2_priority: p2_priority || 0,
       p3_priority: p3_priority || 0,
-      total_priority_score: total_priority_score || totalActivityRupiah || 0,
+      total_priority_score: total_priority_score || positiveActivity || 0,
       p1_weight: getCatWeight('P1'),
       p2_weight: getCatWeight('P2'),
       p3_weight: getCatWeight('P3'),
       total_score: totalScore,
       pir_value: pir,
-      total_activity: totalActivityRupiah,
-      total_activity_rupiah: totalActivityRupiah,
+      total_activity: positiveActivity,
+      total_activity_rupiah: positiveActivity,
+      potongan: deductionAmount,
+      distribusi_potongan: meDistribusiPotongan,
       index_incentive: indexIncentive,
       guarantee_fee: guaranteeFee,
       total_skor_unit: Number(totalSkorUnit),
@@ -1572,6 +1655,8 @@ async function generateEmployeeSlipReport(supabase: any, period: string, unitId?
       unit_proportion: row.unit_proportion,
       unit_allocation: row.unit_allocation,
       unit_total_activity: row.unit_total_activity,
+      potongan: row.potongan,
+      distribusi_potongan: row.distribusi_potongan,
       gross_incentive: row.gross_incentive,
       tax_amount: row.tax_amount,
       tax_detail: row.tax_detail || '-',

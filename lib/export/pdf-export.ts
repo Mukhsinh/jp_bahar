@@ -45,6 +45,8 @@ interface IncentiveSlipData {
   guarantee_fee?: number
   tax_detail?: string
   pnsGrade?: string
+  potongan?: number
+  distribusi_potongan?: number
   assessment_details?: any[]
 }
 
@@ -135,6 +137,10 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     if (i > 0) doc.addPage()
 
     await addKopSurat(doc, companyInfo)
+
+    // Formatting helper
+    const formatCurrency = (num: number) =>
+      new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num)
 
     doc.setFontSize(14)
     doc.setFont('helvetica', 'bold')
@@ -230,6 +236,27 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
           5: { halign: 'center' }
         }
       })
+
+      // AutoTable updates lastAutoTable.finalY
+      let noteY = (doc as any).lastAutoTable.finalY + 5
+
+      if (slip.potongan && slip.potongan > 0) {
+        doc.setFontSize(8)
+        doc.setFont('helvetica', 'italic')
+        doc.setTextColor(239, 68, 68) // Red
+        doc.text(`* Keterangan: Terdapat Potongan Indikator/Denda sebesar ${formatCurrency(slip.potongan)} pada periode ini.`, 15, noteY)
+        noteY += 4
+      }
+
+      if (slip.distribusi_potongan && slip.distribusi_potongan > 0) {
+        doc.setFontSize(8)
+        doc.setFont('helvetica', 'italic')
+        doc.setTextColor(5, 150, 105) // Emerald
+        doc.text(`* Keterangan: Mendapatkan tambahan Insentif (Distribusi Potongan Unit) sebesar ${formatCurrency(slip.distribusi_potongan)}.`, 15, noteY)
+        noteY += 4
+      }
+
+      doc.setTextColor(0, 0, 0) // Reset color
     }
 
     // === RINCIAN PIR (Poin Indeks Rupiah) ===
@@ -242,9 +269,7 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     doc.text('C. PERHITUNGAN PIR (Poin Indeks Rupiah)', 15, yPos + 1)
 
     doc.setFont('helvetica', 'normal')
-    // Formatting helper
-    const formatCurrency = (num: number) =>
-      new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num)
+    doc.setFont('helvetica', 'normal')
 
     const mechanism = slip.tax_mechanism_used || 'ter'
     const isNoTax = mechanism === 'none'
@@ -302,8 +327,18 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
     tableRows.push(['', '1. Insentif Berbasis Indeks (Total Skor × PIR)', formatCurrency(slip.index_incentive || 0)])
     tableRows.push(['', '2. Insentif Berbasis Prioritas (Direct Payout)', formatCurrency(slip.totalActivityRupiah || 0)])
 
+    let nextNum = 3
     if (slip.guarantee_fee && slip.guarantee_fee > 0) {
-      tableRows.push(['', '3. Guarantee Fee', formatCurrency(slip.guarantee_fee || 0)])
+      tableRows.push(['', `${nextNum}. Guarantee Fee`, formatCurrency(slip.guarantee_fee || 0)])
+      nextNum++
+    }
+    if (slip.distribusi_potongan && slip.distribusi_potongan > 0) {
+      tableRows.push(['', `${nextNum}. Tambahan Distribusi Potongan Unit`, `+ ${formatCurrency(slip.distribusi_potongan || 0)}`])
+      nextNum++
+    }
+    if (slip.potongan && slip.potongan > 0) {
+      tableRows.push(['', `${nextNum}. Potongan KPI / Denda`, `- ${formatCurrency(slip.potongan || 0)}`])
+      nextNum++
     }
     tableRows.push(['', '   Total Insentif Bruto', formatCurrency(slip.grossIncentive || 0)])
     tableRows.push(['', '', ''])
@@ -518,7 +553,7 @@ export async function generateSummaryReportPDF(
     })
   } else {
     // Default to incentive
-    head = [['No', 'NIP/NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas', 'PIR', 'Insentif Bruto', 'Pajak', 'Netto']]
+    head = [['No', 'NIP/NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas', 'PIR', 'Potongan', 'Distribusi Potongan', 'Insentif Bruto', 'Pajak', 'Netto']]
     body = results.map((r, i) => [
       i + 1,
       r.employee_code || '-',
@@ -531,6 +566,8 @@ export async function generateSummaryReportPDF(
       formatScore(r.total_score),
       Math.round(Number(r.total_priority_score || r.total_activity_rupiah || r.total_activity || 0)).toLocaleString('id-ID'),
       formatScore(r.pir_value),
+      Math.round(Number(r.potongan) || 0).toLocaleString('id-ID'),
+      Math.round(Number(r.distribusi_potongan) || 0).toLocaleString('id-ID'),
       Math.round(Number(r.gross_incentive) || 0).toLocaleString('id-ID'),
       Math.round(Number(r.tax_amount) || 0).toLocaleString('id-ID'),
       Math.round(Number(r.net_incentive) || 0).toLocaleString('id-ID')
@@ -613,6 +650,8 @@ export async function exportToPDF(options: ReportExportOptions): Promise<Uint8Ar
         totalActivityRupiah: parseNum(item.total_activity_rupiah || item.total_activity),
         index_incentive: parseNum(item.index_incentive),
         guarantee_fee: parseNum(item.guarantee_fee),
+        potongan: parseNum(item.potongan),
+        distribusi_potongan: parseNum(item.distribusi_potongan),
         grossIncentive: parseNum(item.gross_incentive),
         taxAmount: parseNum(item.tax_amount),
         netIncentive: parseNum(item.net_incentive),

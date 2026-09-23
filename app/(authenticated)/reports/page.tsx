@@ -117,11 +117,11 @@ function IncentiveTable({ data }: { data: any[] }) {
   const headers = [
     'NIP/NIK', 'NAMA PEGAWAI', 'UNIT', 'PROPORSI UNIT',
     'P1', 'P2', 'P3', 'TOTAL INDEKS',
-    'INSENTIF PRIORITAS', 'PIR', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
+    'INSENTIF PRIORITAS', 'PIR', 'POTONGAN', 'DISTRIBUSI POTONGAN', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
   ]
   const rightAligned = [
     'PROPORSI UNIT', 'P1', 'P2', 'P3', 'TOTAL INDEKS',
-    'INSENTIF PRIORITAS', 'PIR', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
+    'INSENTIF PRIORITAS', 'PIR', 'POTONGAN', 'DISTRIBUSI POTONGAN', 'INSENTIF BRUTO', 'PAJAK', 'NETTO'
   ]
 
   return (
@@ -149,8 +149,14 @@ function IncentiveTable({ data }: { data: any[] }) {
                 {formatCurrency(Number(row.total_priority_score) || Number(row.total_activity_rupiah) || Number(row.total_activity) || 0)}
               </td>
               <td className="border p-2 text-right text-purple-600 font-mono font-medium">{formatCurrency(Number(row.pir_value) || 0, true, 2)}</td>
+              <td className="border p-2 text-right font-mono font-medium text-red-600">
+                {formatCurrency(Number(row.potongan) || 0)}
+              </td>
+              <td className="border p-2 text-right font-mono font-medium text-emerald-600">
+                {formatCurrency(Number(row.distribusi_potongan) || 0)}
+              </td>
               <td className="border p-2 text-right font-bold font-mono text-slate-800">
-                <div className="text-[9px] text-gray-400 font-normal">(Indeks × PIR) + Prioritas</div>
+                <div className="text-[9px] text-gray-400 font-normal">(Indeks × PIR) + Prioritas + Dist. Pot. - Potongan</div>
                 {formatCurrency(Number(row.gross_incentive) || 0)}
               </td>
               <td className="border p-2 text-right text-red-600 font-mono">

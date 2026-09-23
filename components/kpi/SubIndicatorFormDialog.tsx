@@ -157,7 +157,8 @@ export default function SubIndicatorFormDialog({
     function updateScoringCriterion(index: number, field: 'score' | 'label', value: string | number) {
         const newCriteria = [...formData.scoring_criteria]
         if (field === 'score') {
-            newCriteria[index].score = typeof value === 'string' ? parseFloat(value) || 0 : value
+            const parsed = typeof value === 'string' ? parseFloat(value) : value
+            newCriteria[index].score = isNaN(parsed) ? 0 : parsed
         } else {
             newCriteria[index].label = value.toString()
         }
@@ -210,8 +211,8 @@ export default function SubIndicatorFormDialog({
                 newErrors.scoring_criteria = 'Minimal harus ada satu kriteria penilaian'
             } else {
                 formData.scoring_criteria.forEach((criterion, index) => {
-                    if (isNaN(criterion.score) || criterion.score < 0) {
-                        newErrors[`score_${index}`] = `Skor kriteria ${index + 1} harus berupa angka positif`
+                    if (isNaN(criterion.score)) {
+                        newErrors[`score_${index}`] = `Skor kriteria ${index + 1} harus berupa angka valid`
                     }
                     if (!criterion.label.trim()) {
                         newErrors[`label_${index}`] = `Label kriteria ${index + 1} wajib diisi`
