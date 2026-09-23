@@ -826,14 +826,21 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       const tariff = Number(sub.m_kpi_sub_indicators?.base_index_value || 1);
       const realScore = Number(sub.realization_value || 0) * tariff;
 
-      // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and Math.abs(tariff) > 1)
-      if (Math.abs(realScore) > 0 && effectiveScore !== realScore && Math.abs(tariff) > 1) {
+      // Protect against user entry errors where both Volume and Tariff were entered as Rupiah amounts (>1000)
+      if (Math.abs(Number(sub.realization_value)) > 1000 && Math.abs(tariff) > 1000) {
+        effectiveScore = Number(sub.realization_value);
+      } else if (Math.abs(realScore) > 0 && effectiveScore !== realScore && Math.abs(tariff) > 1) {
+        // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and Math.abs(tariff) > 1)
         effectiveScore = realScore;
       }
 
       // Fallback for priority activity types saved incorrectly as 0
       if (effectiveScore === 0 && Math.abs(realScore) > 0) {
-        effectiveScore = realScore;
+        if (Math.abs(Number(sub.realization_value)) > 1000 && Math.abs(tariff) > 1000) {
+          effectiveScore = Number(sub.realization_value);
+        } else {
+          effectiveScore = realScore;
+        }
       }
     } else {
       // Re-hydrate qualitative (scoring) metric manually
@@ -849,7 +856,15 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
           const subBase = Number(sub.m_kpi_sub_indicators?.base_index_value || 0)
           const mainBase = Number(mainAsses?.m_kpi_indicators?.base_index_value || 0)
           const baseIndex = subBase !== 0 ? subBase : (mainBase !== 0 ? mainBase : 1)
-          effectiveScore = Number(sub.realization_value) * baseIndex
+
+          // Fix for astronomical priority incentive values caused by qualitative metric configuration errors. 
+          // If both realization_value and baseIndex are massive (Rp values), the user just wanted the realization_value (already Rp).
+          // We apply the exact existing formula (Volume * Tarif) generally, but safeguard here.
+          if (Math.abs(Number(sub.realization_value)) > 1000 && Math.abs(baseIndex) > 1000) {
+            effectiveScore = Number(sub.realization_value)
+          } else {
+            effectiveScore = Number(sub.realization_value) * baseIndex
+          }
         } else {
           effectiveScore = Number(sub.realization_value) * (isMed ? 1 : (weight / 100))
         }
