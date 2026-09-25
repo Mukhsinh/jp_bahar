@@ -445,11 +445,17 @@ export async function POST(request: NextRequest) {
                     .eq('indicator_id', umumInd.id)
 
                   const subCodeMap = new Map((umumSubs || []).map((s: any) => [s.code, s.id]))
-                  mappedSubAssessments = assessmentItem.sub_assessments.map((s: any) => ({
-                    ...s,
-                    id: undefined,
-                    sub_indicator_id: subCodeMap.get(s.code) || s.sub_indicator_id
-                  }))
+                  mappedSubAssessments = assessmentItem.sub_assessments
+                    .map((s: any) => {
+                      const targetSubId = subCodeMap.get(s.code)
+                      if (!targetSubId) return null // Skip sub-indicators that do not exist in UMUM
+                      return {
+                        ...s,
+                        id: undefined,
+                        sub_indicator_id: targetSubId
+                      }
+                    })
+                    .filter((item): item is NonNullable<typeof item> => item !== null)
                 }
 
                 const copyItem: Assessment = {

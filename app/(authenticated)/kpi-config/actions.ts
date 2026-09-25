@@ -60,6 +60,16 @@ export async function updateUnitKPISchemaMode(unitId: string, kpiSchemaMode: str
 
         if (error) throw error
 
+        if (kpiSchemaMode === 'different') {
+            // Normalize any existing 'all' or NULL revenue_type categories to 'bpjs' for this unit
+            // so BPJS and UMUM categories can be maintained completely independently.
+            await client
+                .from('m_kpi_categories')
+                .update({ revenue_type: 'bpjs' })
+                .eq('unit_id', unitId)
+                .or('revenue_type.eq.all,revenue_type.is.null')
+        }
+
         revalidatePath('/kpi-config')
         return { success: true }
     } catch (error: any) {

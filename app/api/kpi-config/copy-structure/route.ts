@@ -40,6 +40,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Unit ini belum memiliki struktur KPI BPJS Kesehatan untuk disalin.' }, { status: 400 })
         }
 
+        // Normalize any 'all' categories to 'bpjs' so BPJS and UMUM are strictly separated
+        await supabase
+            .from('m_kpi_categories')
+            .update({ revenue_type: 'bpjs' })
+            .eq('unit_id', unitId)
+            .or('revenue_type.eq.all,revenue_type.is.null')
+
         // 2. Remove any existing 'umum' categories (and their indicators/sub-indicators)
         const { data: existingUmumCats, error: fetchUmumErr } = await supabase
             .from('m_kpi_categories')
