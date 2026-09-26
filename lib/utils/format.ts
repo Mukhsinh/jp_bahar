@@ -33,7 +33,7 @@ export function formatDecimal(value: number | string, maxDecimals: number = 4, m
   const num = typeof value === 'string' ? parseFloat(value) : value
   if (isNaN(num)) return '0'
 
-  const min = minDecimals !== undefined ? minDecimals : (num > 0 && num < 100 && num % 1 !== 0 ? 4 : 0)
+  const min = minDecimals !== undefined ? minDecimals : 0
 
   return new Intl.NumberFormat('id-ID', {
     minimumFractionDigits: min,

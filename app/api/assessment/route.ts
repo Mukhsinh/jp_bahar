@@ -307,7 +307,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const { data: assessments, error: fetchErr } = await adminClient
+    let { data: assessments, error: fetchErr } = await adminClient
       .from('t_kpi_assessments')
       .select('*')
       .eq('employee_id', employeeId)
@@ -317,6 +317,32 @@ export async function GET(request: NextRequest) {
 
     if (fetchErr) {
       throw new Error(`Failed to fetch assessments: ${fetchErr.message}`)
+    }
+
+    // Fallback: If querying 'umum' and no assessment rows returned, check if employee's unit uses 'same' (non-different) KPI schema
+    if ((!assessments || assessments.length === 0) && revenueType === 'umum') {
+      const { data: targetEmp } = await adminClient
+        .from('m_employees')
+        .select('unit_id, m_units(kpi_schema_mode)')
+        .eq('id', employeeId)
+        .single()
+
+      const unitData = Array.isArray(targetEmp?.m_units) ? targetEmp?.m_units[0] : targetEmp?.m_units
+      const isDifferent = unitData?.kpi_schema_mode === 'different'
+
+      if (!isDifferent) {
+        const { data: bpjsAssessments } = await adminClient
+          .from('t_kpi_assessments')
+          .select('*')
+          .eq('employee_id', employeeId)
+          .eq('period', period)
+          .or('revenue_type.eq.bpjs,revenue_type.is.null')
+          .order('created_at')
+
+        if (bpjsAssessments && bpjsAssessments.length > 0) {
+          assessments = bpjsAssessments
+        }
+      }
     }
 
     return NextResponse.json({ assessments: assessments || [] })

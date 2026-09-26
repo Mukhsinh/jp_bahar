@@ -133,8 +133,8 @@ export async function GET(request: NextRequest) {
       if (isDifferentKPISchema) {
         return c.revenue_type === revenueType || c.revenue_type === 'all' || !c.revenue_type
       }
-      // If same KPI schema, take BPJS or all or default categories
-      return c.revenue_type === 'bpjs' || c.revenue_type === 'all' || !c.revenue_type
+      // If same KPI schema, take categories regardless of whether revenue_type is bpjs, umum, all or null
+      return c.revenue_type === 'bpjs' || c.revenue_type === 'umum' || c.revenue_type === 'all' || !c.revenue_type
     })
 
     console.log('[indicators] filtered categories for unit:', categories.length)

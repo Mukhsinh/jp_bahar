@@ -17,6 +17,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Plus, Trash2, AlertCircle, ArrowUp, ArrowDown } from 'lucide-react'
 import type { KPIIndicator, KPISubIndicator, ScoringCriterion } from '@/lib/types/kpi.types'
+import { formatDecimal } from '@/lib/utils/format'
 
 interface SubIndicatorFormDialogProps {
     open: boolean
@@ -93,9 +94,7 @@ export default function SubIndicatorFormDialog({
                 measurement_type: (subIndicator.measurement_type as any) || 'scoring',
                 unit_tariff: subIndicator.unit_tariff?.toString() || '',
                 base_index_value: subIndicator.base_index_value !== undefined && subIndicator.base_index_value !== null
-                    ? (Number(subIndicator.base_index_value) < 100 && Number(subIndicator.base_index_value) % 1 !== 0
-                        ? Number(subIndicator.base_index_value).toFixed(4)
-                        : subIndicator.base_index_value.toString())
+                    ? subIndicator.base_index_value.toString()
                     : '',
                 service_types: subIndicator.service_types || []
             })
@@ -127,14 +126,14 @@ export default function SubIndicatorFormDialog({
         const others = existingSubIndicators.filter(s => s.id !== subIndicator?.id)
         const otherWeightsSum = others.reduce((sum, s) => sum + Number(s.weight_percentage), 0)
         const totalWeight = otherWeightsSum + weight
-        const isValid = Math.abs(totalWeight - 100) < 0.01
+        const isValid = Math.abs(totalWeight - 100) < 0.0001
 
         return {
             total: totalWeight,
             isValid,
             message: isValid
-                ? `Total bobot: ${totalWeight.toFixed(2)}% ✓`
-                : `Total bobot: ${totalWeight.toFixed(2)}% (target 100%)`
+                ? `Total bobot: ${formatDecimal(totalWeight, 4)}% ✓`
+                : `Total bobot: ${formatDecimal(totalWeight, 4)}% (target 100%)`
         }
     }
 
@@ -196,8 +195,8 @@ export default function SubIndicatorFormDialog({
                 const otherWeightsSum = others.reduce((sum, s) => sum + Number(s.weight_percentage), 0)
                 const totalWeight = otherWeightsSum + weight
 
-                if (totalWeight > 100.01) {
-                    newErrors.weight_percentage = `Total bobot akan menjadi ${totalWeight.toFixed(2)}% (maksimal 100%)`
+                if (totalWeight > 100.0001) {
+                    newErrors.weight_percentage = `Total bobot akan menjadi ${formatDecimal(totalWeight, 4)}% (maksimal 100%)`
                 }
             }
         }
@@ -319,10 +318,11 @@ export default function SubIndicatorFormDialog({
                                         <Input
                                             id="sub_weight"
                                             type="number"
-                                            step="0.01"
+                                            step="0.0001"
+                                            min="0"
                                             value={formData.weight_percentage}
                                             onChange={(e) => setFormData({ ...formData, weight_percentage: e.target.value })}
-                                            placeholder="0.00"
+                                            placeholder="0.0000"
                                             className={errors.weight_percentage ? 'border-red-500' : ''}
                                         />
                                         {errors.weight_percentage ? (

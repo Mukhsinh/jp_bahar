@@ -305,8 +305,9 @@ export default function AssessmentFormDialog({
           const subConfig = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
           if (subConfig?.measurement_type === 'quantitative') isQuantitativeIndicator = true
 
-          // For quantitative/activity, weight acts as 1 (so volume*tariff adds up directly)
-          const weight = (isMedicalUnit || isQuantitativeIndicator) ? 1 : (subConfig ? (subConfig.weight_percentage / 100) : 0)
+          // For quantitative/activity or unweighted category, weight acts as 1
+          const category = categories.find(c => c.indicators.some(i => i.id === indicatorId))
+          const weight = (isMedicalUnit || isQuantitativeIndicator || category?.is_weighted === false) ? 1 : (subConfig ? (subConfig.weight_percentage / 100) : 0)
           sumScores += (sub.score || 0) * weight
           sumVolumes += (sub.realization_value || 0)
         })
@@ -620,10 +621,52 @@ export default function AssessmentFormDialog({
               const isPriority = indicator.calculation_method === 'priority'
               const isActivity = category.configuration_style === 'activity'
 
-              if (isPriority) {
-                totalSkorPrioritas += assessment ? assessment.realization_value : 0;
-              } else if (isActivity) {
-                totalSkorPrioritas += assessment ? assessment.score : 0;
+              if (isPriority || isActivity) {
+                if (assessment) {
+                  if (assessment.sub_assessments && assessment.sub_assessments.length > 0) {
+                    let sumSubRupiah = 0
+                    assessment.sub_assessments.forEach(sa => {
+                      const subDef = indicator.sub_indicators?.find(s => s.id === sa.sub_indicator_id)
+                      const tariff = parseFloat(subDef?.base_index_value?.toString() || '1') || 1
+                      const real = sa.realization_value || 0
+                      let val = 0
+
+                      if (sa.score !== undefined && sa.score !== null && sa.score !== 0) {
+                        if (Math.abs(sa.score) > 1000000000 && Math.abs(real) <= 100000000) {
+                          val = (Math.abs(real) > 1000 && Math.abs(tariff) > 1000) ? real : real * tariff
+                        } else {
+                          val = sa.score
+                        }
+                      } else {
+                        if (Math.abs(real) > 1000 && Math.abs(tariff) > 1000) {
+                          val = real
+                        } else {
+                          val = real * tariff
+                        }
+                      }
+                      sumSubRupiah += val
+                    })
+                    totalSkorPrioritas += sumSubRupiah
+                  } else {
+                    const tariff = parseFloat(indicator.base_index_value?.toString() || '1') || 1
+                    const real = assessment.realization_value || 0
+                    let val = 0
+                    if (assessment.score !== undefined && assessment.score !== null && assessment.score !== 0) {
+                      if (Math.abs(assessment.score) > 1000000000 && Math.abs(real) <= 100000000) {
+                        val = (Math.abs(real) > 1000 && Math.abs(tariff) > 1000) ? real : real * tariff
+                      } else {
+                        val = assessment.score
+                      }
+                    } else {
+                      if (Math.abs(real) > 1000 && Math.abs(tariff) > 1000) {
+                        val = real
+                      } else {
+                        val = real * tariff
+                      }
+                    }
+                    totalSkorPrioritas += val
+                  }
+                }
               }
             })
           })
@@ -639,7 +682,30 @@ export default function AssessmentFormDialog({
               const assessment = assessments[indicator.id]
               const indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
               const indTarget = getIndicatorTarget(indicator)
-              const indRealisasi = assessment ? assessment.realization_value : 0
+
+              let indRealisasi = assessment ? (assessment.realization_value || 0) : 0
+              const hasSubIndicators = indicator.sub_indicators && indicator.sub_indicators.length > 0
+
+              if (hasSubIndicators || indRealisasi === 0) {
+                if (assessment?.score !== undefined && assessment.score !== null && assessment.score > 0) {
+                  indRealisasi = assessment.score
+                } else if (assessment?.sub_assessments && assessment.sub_assessments.length > 0) {
+                  let calcSum = 0
+                  let isQuant = false
+                  assessment.sub_assessments.forEach(sub => {
+                    const subConf = indicator.sub_indicators?.find(s => s.id === sub.sub_indicator_id)
+                    if (subConf?.measurement_type === 'quantitative') {
+                      isQuant = true
+                      calcSum += sub.score || ((sub.realization_value || 0) * (subConf?.base_index_value || 1))
+                    } else {
+                      const w = (isMedicalUnit || isQuant || category.is_weighted === false) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
+                      calcSum += (sub.realization_value || 0) * w
+                    }
+                  })
+                  if (calcSum > 0) indRealisasi = calcSum
+                }
+              }
+
               const isPriority = indicator.calculation_method === 'priority'
 
               if (!isPriority) {
@@ -647,29 +713,26 @@ export default function AssessmentFormDialog({
                   totalRealisasiKategori += (indRealisasi * (indWeight / 100))
                   totalTargetKategori += (indTarget * (indWeight / 100))
                 } else {
-                  // Unweighted category: sum indicators as raw achievement vs 100
-                  const ach = indTarget > 0 ? (indRealisasi / indTarget) * 100 : 0
-                  totalRealisasiKategori += ach
-                  totalTargetKategori += 100
+                  // Unweighted category ("Tanpa Bobot"): sum indicator basic scores directly without capping
+                  totalRealisasiKategori += indRealisasi
+                  if (indTarget > 0) {
+                    totalTargetKategori += indTarget
+                  }
                 }
               }
             })
 
             const porsiKategori = category.weight_percentage
             let kontribusiAkhir = 0
-            if (totalTargetKategori > 0) {
-              if (category.is_weighted !== false) {
+            if (category.is_weighted !== false) {
+              if (totalTargetKategori > 0) {
                 kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * porsiKategori
               } else {
-                // For unweighted, the "contribution" is just the average achievement percentage
-                kontribusiAkhir = (totalRealisasiKategori / totalTargetKategori) * 100
+                kontribusiAkhir = totalRealisasiKategori * (porsiKategori / 100)
               }
             } else {
-              if (category.is_weighted !== false) {
-                kontribusiAkhir = totalRealisasiKategori * (porsiKategori / 100)
-              } else {
-                kontribusiAkhir = totalRealisasiKategori
-              }
+              // For unweighted category ("Tanpa Bobot"), contribution IS the sum of basic scores
+              kontribusiAkhir = totalRealisasiKategori
             }
 
             const poinAkhir = isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir;
@@ -679,7 +742,7 @@ export default function AssessmentFormDialog({
               <Card key={catCode} className="border-gray-200">
                 <CardHeader className="py-2 px-3 flex flex-row items-center justify-between space-y-0">
                   <CardTitle className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                    Total {catCode} ({porsiKategori}%)
+                    Total {catCode} ({category.is_weighted !== false ? `${porsiKategori}%` : 'Tanpa Bobot'})
                   </CardTitle>
                   <Badge variant="secondary" className="text-[10px] font-medium px-1.5 py-0 border-blue-200 bg-blue-50 text-blue-700">
                     {poinAkhir.toFixed(2)}
@@ -690,7 +753,10 @@ export default function AssessmentFormDialog({
                     {poinAkhir.toFixed(2)}
                   </div>
                   <div className="text-[10px] text-gray-400">
-                    {totalRealisasiKategori.toFixed(2)} / {totalTargetKategori.toFixed(2)}
+                    {category.is_weighted !== false
+                      ? `${totalRealisasiKategori.toFixed(2)} / ${totalTargetKategori.toFixed(2)}`
+                      : (totalTargetKategori > 0 ? `${totalRealisasiKategori.toFixed(2)} / ${totalTargetKategori.toFixed(2)}` : `Skor Dasar: ${totalRealisasiKategori.toFixed(2)}`)
+                    }
                   </div>
                 </CardContent>
               </Card>
@@ -815,7 +881,7 @@ export default function AssessmentFormDialog({
                             isQuant = true;
                             calcSum += sub.score || ((sub.realization_value || 0) * (subConf?.base_index_value || 1))
                           } else {
-                            const w = (isMedicalUnit || isQuant) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
+                            const w = (isMedicalUnit || isQuant || category.is_weighted === false) ? 1 : (subConf ? (subConf.weight_percentage / 100) : 0)
                             calcSum += (sub.realization_value || 0) * w
                           }
                         })
@@ -974,14 +1040,7 @@ export default function AssessmentFormDialog({
                                                               subIndicatorTotal += v * t.tariff;
                                                             });
 
-                                                            const category = categories.find(c => c.indicators.some(i => i.id === indicator.id))
-                                                            const isActivity = category?.configuration_style === 'activity'
-                                                            let calculatedScore = 0
-                                                            if (isActivity) {
-                                                              calculatedScore = subIndicatorTotal
-                                                            } else {
-                                                              calculatedScore = subIndicatorTotal * (sub.base_index_value || 1)
-                                                            }
+                                                            const calculatedScore = subIndicatorTotal
 
                                                             handleSubAssessmentChange(indicator.id, sub.id, subIndicatorTotal, calculatedScore)
                                                           }
@@ -1011,7 +1070,12 @@ export default function AssessmentFormDialog({
                                                   onChange={(e) => {
                                                     const vol = parseFloat(e.target.value) || 0
                                                     const sTariff = sub.base_index_value || 0
-                                                    const calculatedScore = vol * sTariff
+                                                    let calculatedScore = 0
+                                                    if (Math.abs(vol) > 1000 && Math.abs(sTariff) > 1000) {
+                                                      calculatedScore = vol
+                                                    } else {
+                                                      calculatedScore = vol * (sTariff || 1)
+                                                    }
 
                                                     handleSubAssessmentChange(indicator.id, sub.id, vol, calculatedScore)
                                                   }}

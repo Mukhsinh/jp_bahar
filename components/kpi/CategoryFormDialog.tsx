@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import type { KPICategory } from '@/lib/types/kpi.types'
 import { Download, FileSpreadsheet } from 'lucide-react'
 import ExcelImportDialog from './ExcelImportDialog'
+import { formatDecimal } from '@/lib/utils/format'
 
 interface CategoryFormDialogProps {
   open: boolean
@@ -117,8 +118,8 @@ export default function CategoryFormDialog({
           const otherWeightsSum = otherCategories.reduce((sum, c) => sum + Number(c.weight_percentage), 0)
           const totalWeight = otherWeightsSum + weight
 
-          if (totalWeight > 100.01) { // Allow small floating point tolerance
-            newErrors.weight_percentage = `Total bobot akan menjadi ${totalWeight.toFixed(2)}% (maksimal 100%)`
+          if (totalWeight > 100.0001) { // Allow small floating point tolerance
+            newErrors.weight_percentage = `Total bobot akan menjadi ${formatDecimal(totalWeight, 4)}% (maksimal 100%)`
           }
         }
       }
@@ -160,8 +161,8 @@ export default function CategoryFormDialog({
       total: totalWeight,
       isValid,
       message: isValid
-        ? `Total bobot: ${totalWeight.toFixed(2)}% ✓`
-        : `Total bobot: ${totalWeight.toFixed(2)}% (harus 100%)`
+        ? `Total bobot: ${formatDecimal(totalWeight, 4)}% ✓`
+        : `Total bobot: ${formatDecimal(totalWeight, 4)}% (harus 100%)`
     }
   }
 
@@ -300,12 +301,12 @@ export default function CategoryFormDialog({
                     <Input
                       id="weight_percentage"
                       type="number"
-                      step="0.01"
-                      min="0.01"
+                      step="0.0001"
+                      min="0"
                       max="100"
                       value={formData.weight_percentage}
                       onChange={(e) => setFormData({ ...formData, weight_percentage: e.target.value })}
-                      placeholder="contoh: 33.33"
+                      placeholder="contoh: 33.3333 atau 0.0035"
                     />
                     {errors.weight_percentage && (
                       <p className="text-sm text-red-600">{errors.weight_percentage}</p>

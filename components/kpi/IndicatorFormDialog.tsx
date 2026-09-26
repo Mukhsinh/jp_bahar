@@ -16,6 +16,7 @@ import type { KPICategory, KPIIndicator, KPISubIndicator, ScoringCriterion } fro
 import { createIndicator, updateIndicator } from '@/app/actions/indicator-actions'
 import { createSubIndicator, updateSubIndicator } from '@/app/actions/sub-indicator-actions'
 import { Textarea } from '@/components/ui/textarea'
+import { formatDecimal } from '@/lib/utils/format'
 
 interface IndicatorFormDialogProps {
   open: boolean
@@ -176,8 +177,8 @@ export default function IndicatorFormDialog({
       total: totalWeight,
       isValid,
       message: isValid
-        ? `Total bobot: ${totalWeight.toFixed(2)}% ✓`
-        : `Total bobot: ${totalWeight.toFixed(2)}% (harus 100%)`
+        ? `Total bobot: ${formatDecimal(totalWeight, 4)}% ✓`
+        : `Total bobot: ${formatDecimal(totalWeight, 4)}% (harus 100%)`
     }
   }
 
@@ -240,8 +241,8 @@ export default function IndicatorFormDialog({
           const otherWeightsSum = otherIndicators.reduce((sum, i) => sum + Number(i.weight_percentage), 0)
           const totalWeight = otherWeightsSum + weight
 
-          if (totalWeight > 100.01) {
-            newErrors.weight_percentage = `Total bobot akan menjadi ${totalWeight.toFixed(2)}% (maksimal 100%)`
+          if (totalWeight > 100.0001) {
+            newErrors.weight_percentage = `Total bobot akan menjadi ${formatDecimal(totalWeight, 4)}% (maksimal 100%)`
           }
         }
       }
@@ -438,12 +439,12 @@ export default function IndicatorFormDialog({
                   <Input
                     id="weight_percentage"
                     type="number"
-                    step="0.01"
-                    min="0.01"
+                    step="0.0001"
+                    min="0"
                     max="100"
                     value={formData.weight_percentage}
                     onChange={(e) => setFormData({ ...formData, weight_percentage: e.target.value })}
-                    placeholder="contoh: 25.00"
+                    placeholder="contoh: 25.0000 atau 0.0035"
                   />
                   {errors.weight_percentage && (
                     <p className="text-sm text-red-600">{errors.weight_percentage}</p>

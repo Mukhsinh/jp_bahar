@@ -148,7 +148,7 @@ const KPITree = memo(function KPITree({
       {categories.some(c => c.is_weighted !== false) && (
         <div className={`p-3 rounded-lg ${isValidCategorySum ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
           <p className={`text-sm font-medium ${isValidCategorySum ? 'text-green-800' : 'text-red-800'}`}>
-            Total Bobot Kategori (Tertimbang): {formatNumber(categoryWeightSum, 2)}%
+            Total Bobot Kategori (Tertimbang): {formatDecimal(categoryWeightSum, 4)}%
             {isValidCategorySum ? ' ✓' : ' (Harus sama dengan 100%)'}
           </p>
         </div>
@@ -182,7 +182,7 @@ const KPITree = memo(function KPITree({
                     <span className="text-gray-700">{category.category_name}</span>
                     {category.is_weighted !== false ? (
                       <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-sm font-medium">
-                        {formatNumber(category.weight_percentage || 0, 2)}%
+                        {formatDecimal(category.weight_percentage || 0, 4)}%
                       </span>
                     ) : (
                       <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded text-sm font-medium">
@@ -195,7 +195,7 @@ const KPITree = memo(function KPITree({
                   )}
                   {categoryIndicators.length > 0 && category.is_weighted !== false && (
                     <p className={`text-xs mt-1 ${isValidIndicatorSum ? 'text-green-600' : 'text-red-600'}`}>
-                      Bobot indikator: {formatNumber(indicatorWeightSum, 2)}%
+                      Bobot indikator: {formatDecimal(indicatorWeightSum, 4)}%
                       {isValidIndicatorSum ? ' ✓' : ' (Harus sama dengan 100%)'}
                     </p>
                   )}
@@ -265,7 +265,7 @@ const KPITree = memo(function KPITree({
                                 <span className="font-medium">{indicator.name}</span>
                                 {category.is_weighted !== false && indicator.calculation_method !== 'priority' && (
                                   <span className="px-2 py-0.5 bg-green-100 text-green-800 rounded text-xs font-medium">
-                                    {formatNumber(indicator.weight_percentage || 0, 2)}%
+                                    {formatDecimal(indicator.weight_percentage || 0, 4)}%
                                   </span>
                                 )}
                                 {indicator.calculation_method === 'priority' && (
@@ -296,7 +296,7 @@ const KPITree = memo(function KPITree({
                               )}
                               {indicatorSubs.length > 0 && category.is_weighted !== false && indicator.calculation_method !== 'priority' && (
                                 <p className={`text-xs mt-1 ${isValidSubSum ? 'text-green-600' : 'text-amber-600'}`}>
-                                  Bobot sub indikator: {formatNumber(subWeightSum, 2)}%
+                                  Bobot sub indikator: {formatDecimal(subWeightSum, 4)}%
                                   {isValidSubSum ? ' ✓' : ' (Harus sama dengan 100%)'}
                                 </p>
                               )}
@@ -360,7 +360,7 @@ const KPITree = memo(function KPITree({
                                           <span className="text-sm font-medium">{sub.name}</span>
                                           {category.is_weighted !== false && indicator.calculation_method !== 'priority' && (
                                             <span className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded text-xs font-medium">
-                                              {formatNumber(sub.weight_percentage || 0, 2)}%
+                                              {formatDecimal(sub.weight_percentage || 0, 4)}%
                                             </span>
                                           )}
                                         </div>
