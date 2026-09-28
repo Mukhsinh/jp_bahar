@@ -18,13 +18,12 @@ export function isMedicalUnit(unitId?: string | null, unitName?: string | null):
     if (unitName) {
         const upperName = unitName.toUpperCase().trim()
 
-        // Exact match for 'MEDIS' or starts with 'MEDIS ' 
-        // to handle cases like 'MEDIS - DOKTER' but exclude 'REKAM MEDIS'
         if (upperName === MEDICAL_UNIT_NAME_KEYWORD) return true
         if (upperName.startsWith(MEDICAL_UNIT_NAME_KEYWORD + ' ')) return true
-
-        // Original logic was too broad (includes), now we only allow 
-        // specific 'MEDIS' unit or the known ID.
+        if (upperName.includes('MEDIS') && !upperName.includes('REKAM MEDIS')) return true
+        if (upperName.includes('DOKTER')) return true
+        if (upperName.includes('RADIOLOGI')) return true
+        if (upperName.includes('SPESIALIS')) return true
     }
 
     return false

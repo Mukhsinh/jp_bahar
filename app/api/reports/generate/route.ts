@@ -791,19 +791,31 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       empIds,
       q => {
         let qry = q.eq('period', period).is('sub_indicator_id', null)
-        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+        if (revenueType && revenueType !== 'all') {
+          if (revenueType === 'bpjs') {
+            qry = qry.or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+          } else {
+            qry = qry.eq('revenue_type', revenueType)
+          }
+        }
         return qry
       }
     ),
     batchedIn(
       supabase,
       't_kpi_assessments',
-      'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
+      'employee_id, indicator_id, score, realization_value, sub_indicator_id, revenue_type, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
       'employee_id',
       empIds,
       q => {
         let qry = q.eq('period', period).not('sub_indicator_id', 'is', null)
-        if (revenueType && revenueType !== 'all') qry = qry.eq('revenue_type', revenueType)
+        if (revenueType && revenueType !== 'all') {
+          if (revenueType === 'bpjs') {
+            qry = qry.or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+          } else {
+            qry = qry.eq('revenue_type', revenueType)
+          }
+        }
         return qry
       }
     )
@@ -817,72 +829,9 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     }
   }
 
-  // Bidirectional fallback between UMUM and BPJS:
-  // If generating report for one revenue type (e.g. BPJS or UMUM), for employees or indicators
-  // that have NO assessment in that revenue type (or have priority/potongan assessments saved in the other revenue type),
-  // fetch assessment data from the opposite revenue type as a fallback so calculations are accurate.
-  const oppositeRevenue = revenueType === 'bpjs' ? 'umum' : revenueType === 'umum' ? 'bpjs' : null
-
-  if (oppositeRevenue && allEmployees && allEmployees.length > 0) {
-    const mainKeySet = new Set(allAssessments.map((a: any) => `${a.employee_id}:${a.indicator_id}`))
-    const subKeySet = new Set(subAssessments.map((a: any) => `${a.employee_id}:${a.indicator_id}:${a.sub_indicator_id}`))
-
-    const [oppositeMain, oppositeSub] = await Promise.all([
-      batchedIn(
-        supabase,
-        't_kpi_assessments',
-        mainSelectFields,
-        'employee_id',
-        empIds,
-        q => q.eq('period', period).is('sub_indicator_id', null).eq('revenue_type', oppositeRevenue)
-      ),
-      batchedIn(
-        supabase,
-        't_kpi_assessments',
-        'employee_id, indicator_id, score, realization_value, sub_indicator_id, m_kpi_sub_indicators (id, measurement_type, base_index_value, weight_percentage)',
-        'employee_id',
-        empIds,
-        q => q.eq('period', period).not('sub_indicator_id', 'is', null).eq('revenue_type', oppositeRevenue)
-      )
-    ])
-
-    // 1. Add main assessments from opposite revenue type if missing or if opposite has non-zero priority deduction
-    for (const opp of oppositeMain) {
-      const empInfo = empUnitMap.get(opp.employee_id)
-      if (empInfo?.schemaMode === 'different') continue
-
-      const key = `${opp.employee_id}:${opp.indicator_id}`
-      const existingIdx = allAssessments.findIndex((a: any) => `${a.employee_id}:${a.indicator_id}` === key)
-
-      if (existingIdx === -1) {
-        allAssessments.push(opp)
-      } else {
-        // If existing assessment has 0 realization but opposite has non-zero realization (e.g. potongan), override/use fallback
-        const existing = allAssessments[existingIdx]
-        if (Number(existing.realization_value || 0) === 0 && Number(opp.realization_value || 0) !== 0) {
-          allAssessments[existingIdx] = opp
-        }
-      }
-    }
-
-    // 2. Add sub assessments from opposite revenue type if missing or if opposite has non-zero realization
-    for (const oppSub of oppositeSub) {
-      const empInfo = empUnitMap.get(oppSub.employee_id)
-      if (empInfo?.schemaMode === 'different') continue
-
-      const key = `${oppSub.employee_id}:${oppSub.indicator_id}:${oppSub.sub_indicator_id}`
-      const existingIdx = subAssessments.findIndex((a: any) => `${a.employee_id}:${a.indicator_id}:${a.sub_indicator_id}` === key)
-
-      if (existingIdx === -1) {
-        subAssessments.push(oppSub)
-      } else {
-        const existing = subAssessments[existingIdx]
-        if (Number(existing.realization_value || 0) === 0 && Number(oppSub.realization_value || 0) !== 0) {
-          subAssessments[existingIdx] = oppSub
-        }
-      }
-    }
-  }
+  // --- REMOVED BIDIRECTIONAL FALLBACK ---
+  // We no longer automatically merge BPJS data into UMUM or vice versa.
+  // The user explicitly controls copying via the "Terapkan nilai penilaian ini secara otomatis untuk UMUM" checkbox on the UI.
 
   // Filter out orphaned or inactive assessment records that don't belong to the unit's active categories for the revenue type
   let indicatorDefMap = new Map<string, any>()
@@ -949,8 +898,11 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     subAssessments = subAssessments.filter((s: any) => {
       const info = empUnitMap.get(s.employee_id)
       if (!info) return true
-      const isPriority = s.m_kpi_sub_indicators?.measurement_type === 'quantitative' || Math.abs(Number(s.realization_value || 0)) > 0
-      if (isPriority) return true
+      if (!s.m_kpi_sub_indicators) return false
+      // Ensure sub-indicator actually belongs to this indicator
+      if (s.m_kpi_sub_indicators.indicator_id && s.m_kpi_sub_indicators.indicator_id !== s.indicator_id) {
+        return false
+      }
 
       const targetRev = s.revenue_type || revenueType
       const validSet = getActiveIndicatorSet(info.unitId, info.schemaMode, targetRev)
@@ -988,24 +940,22 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     const measurementType = sub.m_kpi_sub_indicators?.measurement_type
 
     if (measurementType === 'quantitative') {
-      const tariff = Number(sub.m_kpi_sub_indicators?.base_index_value || 1);
-      const realScore = Number(sub.realization_value || 0) * tariff;
+      let tariffStr = typeof sub.m_kpi_sub_indicators?.base_index_value === 'string'
+        ? sub.m_kpi_sub_indicators.base_index_value.replace(',', '.')
+        : String(sub.m_kpi_sub_indicators?.base_index_value || '1').replace(',', '.')
+      const tariff = Number(tariffStr) || 1
 
-      // Protect against user entry errors where both Volume and Tariff were entered as Rupiah amounts (>1000)
-      if (Math.abs(Number(sub.realization_value)) > 1000 && Math.abs(tariff) > 1000) {
-        effectiveScore = Number(sub.realization_value);
-      } else if (Math.abs(realScore) > 0 && effectiveScore !== realScore && Math.abs(tariff) > 1) {
-        // Retroactively fix score if DB just stored volume (where effectiveScore !== realScore and Math.abs(tariff) > 1)
-        effectiveScore = realScore;
-      }
+      let realVolStr = typeof sub.realization_value === 'string'
+        ? sub.realization_value.replace(/\./g, '').replace(',', '.')
+        : String(sub.realization_value || '0')
+      const subRealization = Number(realVolStr) || 0
 
-      // Fallback for priority activity types saved incorrectly as 0
+      const realScore = subRealization * tariff
+      const mainAsses = allAssessments?.find((a: any) => a.employee_id === sub.employee_id && a.indicator_id === sub.indicator_id)
+      const isPri = mainAsses?.m_kpi_indicators?.calculation_method === 'priority'
+
       if (effectiveScore === 0 && Math.abs(realScore) > 0) {
-        if (Math.abs(Number(sub.realization_value)) > 1000 && Math.abs(tariff) > 1000) {
-          effectiveScore = Number(sub.realization_value);
-        } else {
-          effectiveScore = realScore;
-        }
+        effectiveScore = realScore;
       }
     } else {
       // Re-hydrate qualitative (scoring) metric manually
@@ -1155,11 +1105,10 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
           effectiveScore = indRealization
         }
 
-        const isSubQuantitative = subAgg !== undefined && (
-          subAssessments.some((s: any) => s.employee_id === empId && s.indicator_id === a.indicator_id && (s.m_kpi_sub_indicators?.measurement_type === 'quantitative' || Math.abs(Number(effectiveScore || 0)) > 1000))
-        )
-
-        const isPriority = calcMethod === 'priority' || isSubQuantitative
+        const catStyle = firstCatObj?.configuration_style
+        const isIndexCategory = ['P1', 'P2', 'P3'].some(p => categoryName.trim().toUpperCase().startsWith(p))
+        // Indicators under P1, P2, P3 categories are INDEX scores (P1/P2/P3), NOT priority scores.
+        const isPriority = calcMethod === 'priority'
         const isActivity = isPriority
 
         const indicatorScore = effectiveScore
@@ -1198,10 +1147,10 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         } else if (isPriority) {
           totalActivityRupiah = Number(totalActivityRupiah) + Number(activityValue)
         } else {
-          if (isWeightedCategory) {
+          if (!isMedicalUnit && isWeightedCategory) {
             totalRealisasiKategori += (indicatorScore * (indWeight / 100))
           } else {
-            // Unweighted category ("Tanpa Bobot"): sum indicator basic scores directly without capping
+            // Medical unit or unweighted category ("Tanpa Bobot"): sum indicator scores directly without weighting
             totalRealisasiKategori += indicatorScore
           }
         }

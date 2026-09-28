@@ -51,10 +51,15 @@ export default function AssessmentTable({
     setSelectedEmployee(null)
   }
 
-  const handleAssessmentSaved = () => {
-    toast.success('Penilaian berhasil dan tersimpan')
-    onAssessmentComplete()
-    handleCloseDialog()
+  const handleAssessmentSaved = (continueToUmum = false) => {
+    if (continueToUmum) {
+      toast.success('Penilaian BPJS Kesehatan berhasil disimpan')
+      onAssessmentComplete()
+    } else {
+      toast.success('Penilaian berhasil dan tersimpan')
+      onAssessmentComplete()
+      handleCloseDialog()
+    }
   }
 
   const getStatusBadge = (status: string, completionPercentage: number) => {

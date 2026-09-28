@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { mapSubAssessmentsForCopy } from '@/lib/services/kpi-assessment-sync.service'
 
 interface Assessment {
   id?: string
@@ -43,6 +44,25 @@ async function findEmployeeForUser(adminClient: any, userId: string, authUser: a
       employeeData.role = 'superadmin'
     }
     return employeeData
+  }
+
+  // Try by email as fallback
+  if (authUser.email) {
+    const { data: byEmail } = await adminClient
+      .from('m_employees')
+      .select('id, role, unit_id')
+      .eq('email', authUser.email)
+      .maybeSingle()
+
+    if (byEmail) {
+      if (isSuperAdmin) byEmail.role = 'superadmin'
+      // Auto-link user_id for future lookups
+      await adminClient
+        .from('m_employees')
+        .update({ user_id: userId })
+        .eq('id', byEmail.id)
+      return byEmail
+    }
   }
 
   // 3. Fallback for Superadmins: return virtual employee record
@@ -123,8 +143,6 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
   }
 
   // 1. Prepare Main Assessment Data
-  // Note: achievement_percentage and score are GENERATED ALWAYS columns in PostgreSQL, so we omit them
-  // to allow Postgres to generate them automatically without throwing non-DEFAULT column errors.
   const assessmentData: any = {
     employee_id: assessment.employee_id,
     indicator_id: assessment.indicator_id,
@@ -133,6 +151,7 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
     realization_value: assessment.realization_value,
     target_value: assessment.target_value,
     weight_percentage: assessment.weight_percentage,
+    // achievement_percentage and score are GENERATED ALWAYS AS columns in the DB
     notes: assessment.notes,
     assessor_id: assessment.assessor_id,
     revenue_type: revType,
@@ -205,6 +224,7 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
         realization_value: subRealization,
         target_value: 0,
         weight_percentage: 0,
+        // score and achievement_percentage are GENERATED ALWAYS AS columns in the DB
         notes: sub.notes || '',
         assessor_id: assessment.assessor_id,
         revenue_type: revType,
@@ -239,6 +259,7 @@ async function upsertAssessment(adminClient: any, assessment: Assessment): Promi
         .from('t_kpi_assessments')
         .update({
           realization_value: aggregateRealization,
+          // score is GENERATED ALWAYS AS in the DB
           updated_at: new Date().toISOString()
         })
         .eq('employee_id', assessment.employee_id)
@@ -345,7 +366,21 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ assessments: assessments || [] })
+    // Deduplicate to prevent phantom duplicates from 'null' revenue_type legacy data
+    const uniqueAssessments = new Map<string, any>()
+    const sortedAssessments = (assessments || []).sort((a: any, b: any) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    )
+
+    for (const a of sortedAssessments) {
+      // Create a unique key. If it's a main assessment, just indicator_id.
+      // If it's a sub_assessment, combine indicator_id and sub_indicator_id.
+      const key = a.sub_indicator_id ? `${a.indicator_id}_${a.sub_indicator_id}` : a.indicator_id
+      // Since array is sorted oldest to newest, the map will naturally retain the newest valid value.
+      uniqueAssessments.set(key, a)
+    }
+
+    return NextResponse.json({ assessments: Array.from(uniqueAssessments.values()) })
   } catch (error: any) {
     console.error('Assessment GET error:', error)
     return NextResponse.json(
@@ -465,23 +500,26 @@ export async function POST(request: NextRequest) {
               if (umumInd) {
                 let mappedSubAssessments = assessmentItem.sub_assessments
                 if (Array.isArray(assessmentItem.sub_assessments) && assessmentItem.sub_assessments.length > 0) {
+                  const { data: bpjsSubs } = await adminClient
+                    .from('m_kpi_sub_indicators')
+                    .select('id, code')
+                    .eq('indicator_id', assessmentItem.indicator_id)
+
                   const { data: umumSubs } = await adminClient
                     .from('m_kpi_sub_indicators')
                     .select('id, code')
                     .eq('indicator_id', umumInd.id)
 
-                  const subCodeMap = new Map((umumSubs || []).map((s: any) => [s.code, s.id]))
-                  mappedSubAssessments = assessmentItem.sub_assessments
-                    .map((s: any) => {
-                      const targetSubId = subCodeMap.get(s.code)
-                      if (!targetSubId) return null // Skip sub-indicators that do not exist in UMUM
-                      return {
-                        ...s,
-                        id: undefined,
-                        sub_indicator_id: targetSubId
-                      }
-                    })
-                    .filter((item): item is NonNullable<typeof item> => item !== null)
+                  const mappedItems = mapSubAssessmentsForCopy(
+                    assessmentItem.sub_assessments,
+                    bpjsSubs || [],
+                    umumSubs || []
+                  )
+
+                  mappedSubAssessments = mappedItems.map(m => ({
+                    sub_indicator_id: m.targetSubId,
+                    realization_value: m.realizationValue
+                  }))
                 }
 
                 const copyItem: Assessment = {

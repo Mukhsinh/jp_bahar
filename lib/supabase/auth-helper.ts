@@ -123,6 +123,16 @@ export async function getAuthenticatedUser(supabase: any, request?: Request) {
     try {
         const { data: { user }, error } = await supabase.auth.getUser()
         if (user && !error) return user
+
+        // If getUser failed (e.g. expired token), try refreshing session first
+        if (error) {
+            try {
+                const { data: refreshData } = await supabase.auth.refreshSession()
+                if (refreshData?.user) return refreshData.user
+            } catch (refreshErr) {
+                // ignore refresh errors, continue to fallbacks
+            }
+        }
     } catch (e) {
         // ignore
     }

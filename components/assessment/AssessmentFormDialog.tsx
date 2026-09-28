@@ -91,7 +91,7 @@ interface AssessmentFormDialogProps {
   employee: AssessmentStatus
   period: string
   revenueType?: 'bpjs' | 'umum'
-  onSaved: () => void
+  onSaved: (continueToUmum?: boolean) => void
 }
 
 export default function AssessmentFormDialog({
@@ -138,17 +138,28 @@ export default function AssessmentFormDialog({
   // Load KPI indicators and existing assessments
   useEffect(() => {
     if (open && employee) {
-      loadKPIIndicators(activeRevenueType)
-      loadExistingAssessments(activeRevenueType)
+      loadData(activeRevenueType)
     }
   }, [open, employee, activeRevenueType])
 
-  const loadKPIIndicators = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
+  const loadData = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
+    setLoading(true)
+    try {
+      const currentCats = await loadKPIIndicators(revenueType)
+      await loadExistingAssessments(revenueType, currentCats)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadKPIIndicators = async (revenueType: 'bpjs' | 'umum' = activeRevenueType): Promise<KPICategory[]> => {
     try {
       const response = await fetch(`/api/assessment/indicators?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`)
       if (response.ok) {
         const data = await response.json()
-        setCategories(data.indicators || [])
+        const fetchedCats: KPICategory[] = data.indicators || []
+        setCategories(fetchedCats)
+        return fetchedCats
       } else {
         setError('Failed to load KPI indicators')
       }
@@ -156,26 +167,27 @@ export default function AssessmentFormDialog({
       setError('Error loading KPI indicators')
       console.error('Error loading KPI indicators:', error)
     }
+    return []
   }
 
   const getIndicatorTarget = (indicator: KPIIndicator) => {
     if (indicator.sub_indicators && indicator.sub_indicators.length > 0) {
       const subTargetSum = indicator.sub_indicators.reduce((sum, sub) => {
         const weight = isMedicalUnit ? 1 : (sub.weight_percentage / 100)
-        return sum + ((sub.target_value || 0) * weight)
+        return sum + (Number(sub.target_value || 0) * weight)
       }, 0)
       if (subTargetSum > 0) return subTargetSum
     }
-    return indicator.target_value || 0
+    return Number(indicator.target_value || 0)
   }
 
-  const loadExistingAssessments = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
-    setLoading(true)
+  const loadExistingAssessments = async (revenueType: 'bpjs' | 'umum' = activeRevenueType, currentCategories?: KPICategory[]) => {
     try {
       const response = await fetch(`/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`)
       if (response.ok) {
         const data = await response.json()
         const assessmentMap: Record<string, AssessmentData> = {}
+        const activeCats = (currentCategories && currentCategories.length > 0) ? currentCategories : categories
 
         data.assessments?.forEach((item: any) => {
           const indicatorId = item.indicator_id
@@ -193,6 +205,13 @@ export default function AssessmentFormDialog({
 
           if (item.sub_indicator_id) {
             // This is a sub-assessment row
+            // IMPORTANT: Only load if the sub_indicator still exists in current KPI config
+            const ownerIndicator = activeCats.flatMap(c => c.indicators).find(i => i.id === indicatorId)
+            const subExists = ownerIndicator?.sub_indicators?.some(s => s.id === item.sub_indicator_id)
+            if (activeCats.length > 0 && !subExists) {
+              // Skip orphaned/deleted sub-indicator data entirely
+              return
+            }
             assessmentMap[indicatorId].sub_assessments.push({
               id: item.id,
               sub_indicator_id: item.sub_indicator_id,
@@ -213,8 +232,6 @@ export default function AssessmentFormDialog({
       }
     } catch (error) {
       console.error('Error loading existing assessments:', error)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -303,6 +320,8 @@ export default function AssessmentFormDialog({
         // Bottom-up logic: Sum (Skor * Bobot)
         subAssessments.forEach(sub => {
           const subConfig = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
+          if (!subConfig) return // IMPORTANT: Skip disconnected/orphaned sub assessments
+
           if (subConfig?.measurement_type === 'quantitative') isQuantitativeIndicator = true
 
           // For quantitative/activity or unweighted category, weight acts as 1
@@ -325,7 +344,7 @@ export default function AssessmentFormDialog({
         sumScores = current.score
       }
       const category = categories.find(c => c.indicators.some(i => i.id === indicatorId))
-      const isPriority = indicator && (indicator.calculation_method === 'priority' || category?.configuration_style === 'activity')
+      const isPriority = indicator && indicator.calculation_method === 'priority'
 
       // If qualitative sub-indicators without target, use sum of scores without cap.
       const maxTarget = indicator ? getIndicatorTarget(indicator) : 0
@@ -355,7 +374,7 @@ export default function AssessmentFormDialog({
     }))
   }
 
-  const handleSave = async () => {
+  const handleSave = async (continueToUmum = false) => {
     setSaving(true)
     setError(null)
 
@@ -404,14 +423,20 @@ export default function AssessmentFormDialog({
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
+        if (response.status === 401) {
+          throw new Error('Sesi Anda telah berakhir. Silakan muat ulang halaman (F5) atau login kembali.')
+        }
+        const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error || 'Gagal menyimpan penilaian')
       }
 
       // 2. Trigger parent refresh/success handler
-      // This will call handleAssessmentSaved in AssessmentTable,
-      // which shows the toast success and closes the dialog.
-      onSaved()
+      if (continueToUmum) {
+        setActiveRevenueType('umum')
+        onSaved(true)
+      } else {
+        onSaved(false)
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Gagal menyimpan penilaian')
       console.error('Error saving assessments:', error)
@@ -446,6 +471,11 @@ export default function AssessmentFormDialog({
             }
 
             if (item.sub_indicator_id) {
+              // IMPORTANT: Only load if the sub_indicator still exists in current KPI config
+              const ownerIndicator = categories.flatMap(c => c.indicators).find(i => i.id === indicatorId)
+              const subExists = ownerIndicator?.sub_indicators?.some(s => s.id === item.sub_indicator_id)
+              if (!subExists) return // Skip orphaned sub-indicator data
+
               assessmentMap[indicatorId].sub_assessments.push({
                 sub_indicator_id: item.sub_indicator_id,
                 realization_value: item.realization_value,
@@ -619,14 +649,15 @@ export default function AssessmentFormDialog({
             category.indicators.forEach(indicator => {
               const assessment = assessments[indicator.id]
               const isPriority = indicator.calculation_method === 'priority'
-              const isActivity = category.configuration_style === 'activity'
 
-              if (isPriority || isActivity) {
+              if (isPriority) {
                 if (assessment) {
                   if (assessment.sub_assessments && assessment.sub_assessments.length > 0) {
                     let sumSubRupiah = 0
                     assessment.sub_assessments.forEach(sa => {
                       const subDef = indicator.sub_indicators?.find(s => s.id === sa.sub_indicator_id)
+                      if (!subDef) return // Skip orphaned/deleted sub-indicators
+
                       const tariff = parseFloat(subDef?.base_index_value?.toString() || '1') || 1
                       const real = sa.realization_value || 0
                       let val = 0
@@ -694,6 +725,8 @@ export default function AssessmentFormDialog({
                   let isQuant = false
                   assessment.sub_assessments.forEach(sub => {
                     const subConf = indicator.sub_indicators?.find(s => s.id === sub.sub_indicator_id)
+                    if (!subConf) return // Skip orphaned/deleted sub-indicators
+
                     if (subConf?.measurement_type === 'quantitative') {
                       isQuant = true
                       calcSum += sub.score || ((sub.realization_value || 0) * (subConf?.base_index_value || 1))
@@ -709,11 +742,11 @@ export default function AssessmentFormDialog({
               const isPriority = indicator.calculation_method === 'priority'
 
               if (!isPriority) {
-                if (category.is_weighted !== false) {
+                if (!isMedicalUnit && category.is_weighted !== false) {
                   totalRealisasiKategori += (indRealisasi * (indWeight / 100))
                   totalTargetKategori += (indTarget * (indWeight / 100))
                 } else {
-                  // Unweighted category ("Tanpa Bobot"): sum indicator basic scores directly without capping
+                  // Medical unit or unweighted category ("Tanpa Bobot"): sum indicator basic scores directly without capping
                   totalRealisasiKategori += indRealisasi
                   if (indTarget > 0) {
                     totalTargetKategori += indTarget
@@ -808,7 +841,7 @@ export default function AssessmentFormDialog({
                 </CardHeader>
                 <CardContent className="py-0 px-3 pb-2">
                   <div className="text-lg font-bold text-purple-700">
-                    {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(totalSkorPrioritas)}
+                    Rp {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(totalSkorPrioritas)}
                   </div>
                 </CardContent>
               </Card>
@@ -877,6 +910,8 @@ export default function AssessmentFormDialog({
                         let isQuant = false;
                         (assessment?.sub_assessments || []).forEach(sub => {
                           const subConf = indicator.sub_indicators.find(s => s.id === sub.sub_indicator_id)
+                          if (!subConf) return // IMPORTANT: Skip disconnected/orphaned sub assessments
+
                           if (subConf?.measurement_type === 'quantitative') {
                             isQuant = true;
                             calcSum += sub.score || ((sub.realization_value || 0) * (subConf?.base_index_value || 1))
@@ -1175,10 +1210,24 @@ export default function AssessmentFormDialog({
             <Button variant="outline" onClick={onClose} disabled={saving}>
               Batal
             </Button>
-            <Button onClick={handleSave} disabled={saving || loading}>
-              <Save className="h-4 w-4 mr-2" />
-              {saving ? 'Menyimpan...' : 'Simpan Penilaian'}
-            </Button>
+            {activeRevenueType === 'bpjs' ? (
+              applyToUmum ? (
+                <Button onClick={() => handleSave(false)} disabled={saving || loading}>
+                  <Save className="h-4 w-4 mr-2" />
+                  {saving ? 'Menyimpan...' : 'Simpan BPJS Kesehatan dan UMUM Sekaligus'}
+                </Button>
+              ) : (
+                <Button onClick={() => handleSave(true)} disabled={saving || loading}>
+                  <Save className="h-4 w-4 mr-2" />
+                  {saving ? 'Menyimpan...' : 'Simpan BPJS Kesehatan kemudian Lanjut UMUM'}
+                </Button>
+              )
+            ) : (
+              <Button onClick={() => handleSave(false)} disabled={saving || loading}>
+                <Save className="h-4 w-4 mr-2" />
+                {saving ? 'Menyimpan...' : 'Simpan KPI UMUM'}
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>
