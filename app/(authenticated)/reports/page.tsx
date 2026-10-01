@@ -425,20 +425,28 @@ export default function ReportsPage() {
     }
   }
 
-  const handleExport = async (format: 'excel' | 'pdf') => {
+  const handleExport = async (format: 'excel' | 'pdf', isBreakdown: boolean = false) => {
     if (!reportData || !selectedReport || !selectedPeriod) return
     try {
       const response = await fetch('/api/reports/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportType: selectedReport, period: selectedPeriod, format, data: reportData, revenueType: selectedRevenueType }),
+        body: JSON.stringify({
+          reportType: selectedReport,
+          period: selectedPeriod,
+          format,
+          data: reportData,
+          revenueType: selectedRevenueType,
+          isBreakdown,
+        }),
       })
       if (!response.ok) throw new Error('Ekspor gagal')
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
+      const downloadPrefix = isBreakdown ? `${selectedReport}-breakdown` : selectedReport
       const a = Object.assign(document.createElement('a'), {
         href: url,
-        download: `${selectedReport}-${selectedPeriod}.${format === 'excel' ? 'xlsx' : 'pdf'}`,
+        download: `${downloadPrefix}-${selectedPeriod}.${format === 'excel' ? 'xlsx' : 'pdf'}`,
       })
       document.body.appendChild(a)
       a.click()
@@ -607,15 +615,45 @@ export default function ReportsPage() {
                       <ChevronDown className="w-4 h-4 ml-2" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuItem onClick={() => handleExport('pdf')} className="cursor-pointer">
-                      <FileDown className="w-4 h-4 mr-2 text-red-600" />
-                      Format PDF
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleExport('excel')} className="cursor-pointer">
-                      <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
-                      Format Excel
-                    </DropdownMenuItem>
+                  <DropdownMenuContent align="start" className="w-64">
+                    {selectedReport === 'incentive' ? (
+                      <>
+                        <div className="px-2 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 border-b">
+                          Format PDF
+                        </div>
+                        <DropdownMenuItem onClick={() => handleExport('pdf', false)} className="cursor-pointer">
+                          <FileDown className="w-4 h-4 mr-2 text-red-600" />
+                          PDF - Seluruh Pegawai
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleExport('pdf', true)} className="cursor-pointer">
+                          <FileDown className="w-4 h-4 mr-2 text-red-600" />
+                          PDF - Breakdown Status Pegawai
+                        </DropdownMenuItem>
+
+                        <div className="px-2 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 border-t border-b mt-1">
+                          Format Excel
+                        </div>
+                        <DropdownMenuItem onClick={() => handleExport('excel', false)} className="cursor-pointer">
+                          <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
+                          Excel - Seluruh Pegawai
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleExport('excel', true)} className="cursor-pointer">
+                          <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
+                          Excel - Breakdown Status Pegawai
+                        </DropdownMenuItem>
+                      </>
+                    ) : (
+                      <>
+                        <DropdownMenuItem onClick={() => handleExport('pdf', false)} className="cursor-pointer">
+                          <FileDown className="w-4 h-4 mr-2 text-red-600" />
+                          Format PDF
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleExport('excel', false)} className="cursor-pointer">
+                          <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
+                          Format Excel
+                        </DropdownMenuItem>
+                      </>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}

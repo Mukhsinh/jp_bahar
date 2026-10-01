@@ -72,6 +72,7 @@ interface ReportExportOptions {
   period: string
   data: any[]
   revenueType?: string
+  isBreakdown?: boolean
 }
 
 /**
@@ -391,7 +392,8 @@ export async function generateIncentiveSlipPDF(data: IncentiveSlipData | Incenti
 export async function generateSummaryReportPDF(
   results: any[],
   period: string,
-  reportType: string
+  reportType: string,
+  isBreakdown?: boolean
 ): Promise<Uint8Array> {
   const doc = new jsPDF('landscape')
   const companyInfo = await getCompanyInfoServer()
@@ -554,7 +556,8 @@ export async function generateSummaryReportPDF(
   } else {
     // Default to incentive
     head = [['No', 'NIP/NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas', 'PIR', 'Potongan', 'Distribusi Potongan', 'Insentif Bruto', 'Pajak', 'Netto']]
-    body = results.map((r, i) => [
+
+    const mapPDFRow = (r: any, i: number) => [
       i + 1,
       r.employee_code || '-',
       r.employee_name,
@@ -571,14 +574,88 @@ export async function generateSummaryReportPDF(
       Math.round(Number(r.gross_incentive) || 0).toLocaleString('id-ID'),
       Math.round(Number(r.tax_amount) || 0).toLocaleString('id-ID'),
       Math.round(Number(r.net_incentive) || 0).toLocaleString('id-ID')
-    ])
+    ]
+
+    const calcPDFSubtotal = (label: string, rows: any[]) => {
+      let p1 = 0, p2 = 0, p3 = 0, tot = 0, pri = 0, pot = 0, dist = 0, gross = 0, tax = 0, net = 0
+      for (const r of rows) {
+        p1 += Number(r.p1_score || 0)
+        p2 += Number(r.p2_score || 0)
+        p3 += Number(r.p3_score || 0)
+        tot += Number(r.total_score || 0)
+        pri += Math.round(Number(r.total_priority_score || r.total_activity_rupiah || r.total_activity || 0))
+        pot += Math.round(Number(r.potongan) || 0)
+        dist += Math.round(Number(r.distribusi_potongan) || 0)
+        gross += Math.round(Number(r.gross_incentive) || 0)
+        tax += Math.round(Number(r.tax_amount) || 0)
+        net += Math.round(Number(r.net_incentive) || 0)
+      }
+      return [
+        { content: label, colSpan: 3, styles: { fontStyle: 'bold', halign: 'left' } },
+        `${rows.length} Pegawai`,
+        '-',
+        formatScore(p1),
+        formatScore(p2),
+        formatScore(p3),
+        formatScore(tot),
+        pri.toLocaleString('id-ID'),
+        '-',
+        pot.toLocaleString('id-ID'),
+        dist.toLocaleString('id-ID'),
+        gross.toLocaleString('id-ID'),
+        tax.toLocaleString('id-ID'),
+        net.toLocaleString('id-ID')
+      ]
+    }
+
+    if (reportType === 'incentive' && isBreakdown) {
+      const isASN = (status?: string) => {
+        if (!status) return false
+        const s = String(status).trim().toUpperCase()
+        return s === 'ASN' || s === 'PNS' || s.startsWith('PPPK')
+      }
+
+      const asnResults = results.filter(r => isASN(r.employee_status))
+      const nonAsnResults = results.filter(r => !isASN(r.employee_status))
+
+      body = []
+      body.push([{ content: '--- KATEGORI PEGAWAI: ASN (PNS, PPPK, PPPK PW) ---', colSpan: 16, styles: { fontStyle: 'bold', fillColor: [219, 234, 254], textColor: [30, 64, 175] } as any }])
+      asnResults.forEach((r, i) => body.push(mapPDFRow(r, i)))
+      body.push(calcPDFSubtotal('SUBTOTAL ASN', asnResults))
+
+      body.push([{ content: '--- KATEGORI PEGAWAI: NON-ASN (BLUD) ---', colSpan: 16, styles: { fontStyle: 'bold', fillColor: [254, 243, 199], textColor: [146, 64, 14] } as any }])
+      nonAsnResults.forEach((r, i) => body.push(mapPDFRow(r, i)))
+      body.push(calcPDFSubtotal('SUBTOTAL NON-ASN', nonAsnResults))
+
+      const grand = calcPDFSubtotal('GRAND TOTAL', results)
+      grand[0] = { content: 'GRAND TOTAL', colSpan: 3, styles: { fontStyle: 'bold', fillColor: [30, 41, 59], textColor: [255, 255, 255] } as any }
+      body.push(grand)
+    } else {
+      body = results.map(mapPDFRow)
+    }
+
     autoTable(doc, {
       startY: 50,
       head,
       body,
       theme: 'grid',
       headStyles: { fillColor: [44, 62, 80], textColor: 255, fontSize: 8 },
-      styles: { fontSize: 8, cellPadding: 2 }
+      styles: { fontSize: 8, cellPadding: 2 },
+      didParseCell: function (dataCell) {
+        const rawVal = dataCell.cell.raw as any
+        const rawContent = (typeof rawVal === 'object' && rawVal !== null && 'content' in rawVal)
+          ? String(rawVal.content)
+          : String(rawVal || '')
+
+        if (rawContent.startsWith('SUBTOTAL')) {
+          dataCell.cell.styles.fillColor = [241, 245, 249]
+          dataCell.cell.styles.fontStyle = 'bold'
+        } else if (rawContent === 'GRAND TOTAL') {
+          dataCell.cell.styles.fillColor = [30, 41, 59]
+          dataCell.cell.styles.textColor = [255, 255, 255]
+          dataCell.cell.styles.fontStyle = 'bold'
+        }
+      }
     })
   }
 
@@ -679,7 +756,7 @@ export async function exportToPDF(options: ReportExportOptions): Promise<Uint8Ar
   } else if (options.reportType === 'system-overview') {
     return await generateSystemOverviewPDF()
   } else {
-    return await generateSummaryReportPDF(options.data, options.period, options.reportType)
+    return await generateSummaryReportPDF(options.data, options.period, options.reportType, options.isBreakdown)
   }
 }
 

@@ -8,7 +8,7 @@ import { exportToPDF } from '@/lib/export/pdf-export'
  */
 export async function POST(request: NextRequest) {
   try {
-    const { reportType, period, format, data, revenueType } = await request.json()
+    const { reportType, period, format, data, revenueType, isBreakdown } = await request.json()
 
     if (!reportType || !period || !format || !data) {
       return NextResponse.json(
@@ -21,24 +21,28 @@ export async function POST(request: NextRequest) {
     let contentType: string
     let filename: string
 
+    const filePrefix = isBreakdown ? `${reportType}-breakdown` : reportType
+
     if (format === 'excel') {
       buffer = await exportToExcel({
         reportType,
         period,
         data,
         revenueType,
+        isBreakdown: Boolean(isBreakdown),
       })
       contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      filename = `${reportType}-${period}.xlsx`
+      filename = `${filePrefix}-${period}.xlsx`
     } else if (format === 'pdf') {
       buffer = await exportToPDF({
         reportType,
         period,
         data,
         revenueType,
+        isBreakdown: Boolean(isBreakdown),
       })
       contentType = 'application/pdf'
-      filename = `${reportType}-${period}.pdf`
+      filename = `${filePrefix}-${period}.pdf`
     } else {
       return NextResponse.json(
         { error: 'Invalid format' },

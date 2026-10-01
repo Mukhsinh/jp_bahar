@@ -13,6 +13,93 @@ export interface ReportExportOptions {
   period: string
   data: any[]
   revenueType?: string
+  isBreakdown?: boolean
+}
+
+function isASNStatus(status?: string): boolean {
+  if (!status) return false
+  const s = String(status).trim().toUpperCase()
+  return s === 'ASN' || s === 'PNS' || s.startsWith('PPPK')
+}
+
+function mapIncentiveRow(row: any) {
+  return [
+    row.employee_code || '-',
+    row.nik || '-',
+    row.employee_name,
+    row.unit || '-',
+    row.unit_proportion ? `${Number(row.unit_proportion).toFixed(2)}%` : '-',
+    row.employee_status || '-',
+    row.pns_grade || '-',
+    row.bank_name || '-',
+    row.bank_account_number || '-',
+    row.bank_account_holder || row.employee_name || '-',
+    row.tax_status || 'Non-PKP',
+    Number(Number(row.p1_score || 0).toFixed(2)),
+    Number(Number(row.p2_score || 0).toFixed(2)),
+    Number(Number(row.p3_score || 0).toFixed(2)),
+    Number(Number(row.total_score || 0).toFixed(2)),
+    Math.round(row.total_priority_score || row.total_activity_rupiah || row.total_activity || 0),
+    Number(Number(row.pir_value || 0).toFixed(2)),
+    Math.round(row.potongan || 0),
+    Math.round(row.distribusi_potongan || 0),
+    Math.round(row.gross_incentive || 0),
+    Math.round(row.tax_amount || 0),
+    row.tax_detail || '-',
+    Math.round(row.net_incentive || 0),
+  ]
+}
+
+function calculateIncentiveSubtotal(label: string, rows: any[]) {
+  let sumP1 = 0
+  let sumP2 = 0
+  let sumP3 = 0
+  let sumTotalScore = 0
+  let sumPriority = 0
+  let sumPotongan = 0
+  let sumDistribusi = 0
+  let sumGross = 0
+  let sumTax = 0
+  let sumNet = 0
+
+  for (const row of rows) {
+    sumP1 += Number(row.p1_score || 0)
+    sumP2 += Number(row.p2_score || 0)
+    sumP3 += Number(row.p3_score || 0)
+    sumTotalScore += Number(row.total_score || 0)
+    sumPriority += Math.round(row.total_priority_score || row.total_activity_rupiah || row.total_activity || 0)
+    sumPotongan += Math.round(row.potongan || 0)
+    sumDistribusi += Math.round(row.distribusi_potongan || 0)
+    sumGross += Math.round(row.gross_incentive || 0)
+    sumTax += Math.round(row.tax_amount || 0)
+    sumNet += Math.round(row.net_incentive || 0)
+  }
+
+  return [
+    label,
+    '-',
+    `${rows.length} Pegawai`,
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    Number(sumP1.toFixed(2)),
+    Number(sumP2.toFixed(2)),
+    Number(sumP3.toFixed(2)),
+    Number(sumTotalScore.toFixed(2)),
+    sumPriority,
+    '-',
+    sumPotongan,
+    sumDistribusi,
+    sumGross,
+    sumTax,
+    '-',
+    sumNet
+  ]
 }
 
 /**
@@ -20,7 +107,7 @@ export interface ReportExportOptions {
  * Requirements: 12.5, 16.1, 16.2, 16.7
  */
 export async function exportToExcel(options: ReportExportOptions): Promise<Buffer> {
-  const { reportType, period, data } = options
+  const { reportType, period, data, isBreakdown } = options
 
   // Create workbook
   const wb = XLSX.utils.book_new()
@@ -33,34 +120,30 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
     case 'incentive':
     case 'employee-slip':
       sheetName = reportType === 'incentive' ? 'Incentive Report' : 'Employee Slip'
-      wsData = [
-        ['NIP/NIK', 'NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'Status Pegawai', 'Golongan', 'Nama Bank', 'No. Rekening', 'Nama Pemilik Rek', 'Status Pajak', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas (Rp)', 'PIR', 'Potongan (Rp)', 'Distribusi Potongan (Rp)', 'Insentif Bruto', 'Pajak', 'Keterangan Pajak', 'Insentif Netto'],
-        ...data.map((row: any) => [
-          row.employee_code || '-',
-          row.nik || '-',
-          row.employee_name,
-          row.unit || '-',
-          row.unit_proportion ? `${Number(row.unit_proportion).toFixed(2)}%` : '-',
-          row.employee_status || '-',
-          row.pns_grade || '-',
-          row.bank_name || '-',
-          row.bank_account_number || '-',
-          row.bank_account_holder || row.employee_name || '-',
-          row.tax_status || 'Non-PKP',
-          Number(Number(row.p1_score || 0).toFixed(2)),
-          Number(Number(row.p2_score || 0).toFixed(2)),
-          Number(Number(row.p3_score || 0).toFixed(2)),
-          Number(Number(row.total_score || 0).toFixed(2)),
-          Math.round(row.total_priority_score || row.total_activity_rupiah || row.total_activity || 0),
-          Number(Number(row.pir_value || 0).toFixed(2)),
-          Math.round(row.potongan || 0),
-          Math.round(row.distribusi_potongan || 0),
-          Math.round(row.gross_incentive || 0),
-          Math.round(row.tax_amount || 0),
-          row.tax_detail || '-',
-          Math.round(row.net_incentive || 0),
-        ]),
-      ]
+      const headers = ['NIP/NIK', 'NIK', 'Nama Pegawai', 'Unit', 'Proporsi Unit', 'Status Pegawai', 'Golongan', 'Nama Bank', 'No. Rekening', 'Nama Pemilik Rek', 'Status Pajak', 'P1', 'P2', 'P3', 'Total Indeks', 'Insentif Prioritas (Rp)', 'PIR', 'Potongan (Rp)', 'Distribusi Potongan (Rp)', 'Insentif Bruto', 'Pajak', 'Keterangan Pajak', 'Insentif Netto']
+
+      if (reportType === 'incentive' && isBreakdown) {
+        const asnData = data.filter(row => isASNStatus(row.employee_status))
+        const nonAsnData = data.filter(row => !isASNStatus(row.employee_status))
+
+        wsData = [
+          headers,
+          ['--- KATEGORI PEGAWAI: ASN (PNS, PPPK, PPPK PW) ---'],
+          ...asnData.map(mapIncentiveRow),
+          calculateIncentiveSubtotal('SUBTOTAL ASN', asnData),
+          [''],
+          ['--- KATEGORI PEGAWAI: NON-ASN (BLUD) ---'],
+          ...nonAsnData.map(mapIncentiveRow),
+          calculateIncentiveSubtotal('SUBTOTAL NON-ASN', nonAsnData),
+          [''],
+          calculateIncentiveSubtotal('GRAND TOTAL', data),
+        ]
+      } else {
+        wsData = [
+          headers,
+          ...data.map(mapIncentiveRow),
+        ]
+      }
       break
 
     case 'kpi-achievement': {
@@ -198,6 +281,42 @@ export async function exportToExcel(options: ReportExportOptions): Promise<Buffe
     if (cellValue === '--- KATEGORI BERBASIS INDEKS ---' || cellValue === '--- KATEGORI BERBASIS AKTIVITAS ---') {
       ws[firstCellAddress].s = {
         font: { bold: true, color: { rgb: "2563EB" } },
+      }
+    }
+
+    if (typeof cellValue === 'string' && cellValue.startsWith('--- KATEGORI PEGAWAI:')) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cellAddr = XLSX.utils.encode_cell({ r, c })
+        if (ws[cellAddr]) {
+          ws[cellAddr].s = {
+            font: { bold: true, color: { rgb: "1E40AF" }, sz: 11 },
+            fill: { fgColor: { rgb: "DBEAFE" } },
+          }
+        }
+      }
+    }
+
+    if (typeof cellValue === 'string' && cellValue.startsWith('SUBTOTAL')) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cellAddr = XLSX.utils.encode_cell({ r, c })
+        if (ws[cellAddr]) {
+          ws[cellAddr].s = {
+            font: { bold: true, color: { rgb: "0F172A" } },
+            fill: { fgColor: { rgb: "F1F5F9" } },
+          }
+        }
+      }
+    }
+
+    if (cellValue === 'GRAND TOTAL') {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cellAddr = XLSX.utils.encode_cell({ r, c })
+        if (ws[cellAddr]) {
+          ws[cellAddr].s = {
+            font: { bold: true, color: { rgb: "FFFFFF" } },
+            fill: { fgColor: { rgb: "1E293B" } },
+          }
+        }
       }
     }
   }

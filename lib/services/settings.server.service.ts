@@ -26,34 +26,38 @@ function transformSettingsData(data: any[]): Settings {
 // Server-side functions (use server client with next/headers)
 export async function getSettingsServer(): Promise<{ data: Settings | null; error: string | null }> {
   const supabase = await createServerClient()
-  
+
   const { data, error } = await supabase
     .from('t_settings')
     .select('key, value')
-  
+
   if (error) {
     console.error('Failed to fetch settings:', error)
     return { data: null, error: error.message }
   }
-  
+
   return { data: transformSettingsData(data), error: null }
 }
 
 export async function getSettingServer(key: string): Promise<{ data: any | null; error: string | null }> {
-  const supabase = await createServerClient()
-  
-  const { data, error } = await supabase
-    .from('t_settings')
-    .select('value')
-    .eq('key', key)
-    .single()
-  
-  if (error) {
-    console.error(`Failed to fetch setting ${key}:`, error)
-    return { data: null, error: error.message }
+  try {
+    const supabase = await createServerClient()
+
+    const { data, error } = await supabase
+      .from('t_settings')
+      .select('value')
+      .eq('key', key)
+      .single()
+
+    if (error) {
+      console.error(`Failed to fetch setting ${key}:`, error)
+      return { data: null, error: error.message }
+    }
+
+    return { data: data?.value, error: null }
+  } catch (err: any) {
+    return { data: null, error: (err as Error).message }
   }
-  
-  return { data: data?.value, error: null }
 }
 
 export async function updateSettingServer(
@@ -62,16 +66,16 @@ export async function updateSettingServer(
   description?: string
 ): Promise<{ success: boolean; error: string | null }> {
   const supabase = await createServerClient()
-  
+
   // Get old value for audit log
   const { data: oldData } = await supabase
     .from('t_settings')
     .select('value')
     .eq('key', key)
     .single()
-  
+
   const { data: { user } } = await supabase.auth.getUser()
-  
+
   const { error } = await supabase
     .from('t_settings')
     .update({
@@ -81,12 +85,12 @@ export async function updateSettingServer(
       updated_at: new Date().toISOString(),
     })
     .eq('key', key)
-  
+
   if (error) {
     console.error(`Failed to update setting ${key}:`, error)
     return { success: false, error: error.message }
   }
-  
+
   // Log to audit trail - pass supabase client
   await logAudit({
     table_name: 't_settings',
@@ -96,7 +100,7 @@ export async function updateSettingServer(
     new_value: value,
     details: `Updated setting: ${key}`,
   }, supabase)
-  
+
   return { success: true, error: null }
 }
 
@@ -112,10 +116,10 @@ export async function getSessionTimeoutServer(): Promise<number> {
 
 export async function getCompanyInfoServer(): Promise<any> {
   const { data } = await getSettingServer('company_info')
-  return data || { 
+  return data || {
     appName: 'JASPEL',
-    name: 'JASPEL Enterprise', 
-    address: 'Jakarta, Indonesia', 
+    name: 'JASPEL Enterprise',
+    address: 'Jakarta, Indonesia',
     logo: '',
     footer: '© 2026 JASPEL Enterprise - All Rights Reserved'
   }
