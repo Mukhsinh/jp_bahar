@@ -436,7 +436,9 @@ function generateExcelReport(unit: any, categories: any[], appSettings: any, rev
     totalCategories++
     totalIndicators += indicators.length
     totalSubIndicators += subIndicatorCount
-    totalCategoryWeight += Number(cat.weight_percentage)
+    if (cat.is_weighted !== false) {
+      totalCategoryWeight += Number(cat.weight_percentage)
+    }
   })
 
   summaryData.push(

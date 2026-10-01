@@ -118,7 +118,9 @@ const KPITree = memo(function KPITree({
 
   function calculateIndicatorWeightSum(categoryId: string) {
     const categoryIndicators = getCategoryIndicators(categoryId)
-    return categoryIndicators.reduce((sum, ind) => sum + (Number(ind.weight_percentage) || 0), 0)
+    return categoryIndicators
+      .filter(ind => ind.calculation_method !== 'priority')
+      .reduce((sum, ind) => sum + (Number(ind.weight_percentage) || 0), 0)
   }
 
   function calculateSubIndicatorWeightSum(indicatorId: string) {
@@ -127,7 +129,9 @@ const KPITree = memo(function KPITree({
   }
 
   function calculateCategoryWeightSum() {
-    return categories.reduce((sum, cat) => sum + (Number(cat.weight_percentage) || 0), 0)
+    return categories
+      .filter(cat => cat.is_weighted !== false)
+      .reduce((sum, cat) => sum + (Number(cat.weight_percentage) || 0), 0)
   }
 
   const categoryWeightSum = calculateCategoryWeightSum()
