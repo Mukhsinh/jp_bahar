@@ -22,7 +22,6 @@ export function isMedicalUnit(unitId?: string | null, unitName?: string | null):
         if (upperName.startsWith(MEDICAL_UNIT_NAME_KEYWORD + ' ')) return true
         if (upperName.includes('MEDIS') && !upperName.includes('REKAM MEDIS')) return true
         if (upperName.includes('DOKTER')) return true
-        if (upperName.includes('RADIOLOGI')) return true
         if (upperName.includes('SPESIALIS')) return true
     }
 
