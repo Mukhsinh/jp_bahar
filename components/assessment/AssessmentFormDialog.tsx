@@ -711,11 +711,17 @@ export default function AssessmentFormDialog({
 
             category.indicators.forEach(indicator => {
               const assessment = assessments[indicator.id]
-              const indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
+              let indWeight = parseFloat(indicator.weight_percentage.toString()) || 0
               const indTarget = getIndicatorTarget(indicator)
+              const hasSubIndicators = indicator.sub_indicators && indicator.sub_indicators.length > 0
+
+              // Fix for parent indicator weight being 0 when sub-indicators exist with weights
+              if (indWeight === 0 && hasSubIndicators) {
+                const subWeightSum = indicator.sub_indicators.reduce((sum, s) => sum + (parseFloat((s.weight_percentage || 0).toString()) || 0), 0)
+                indWeight = subWeightSum > 0 ? subWeightSum : 100
+              }
 
               let indRealisasi = assessment ? (assessment.realization_value || 0) : 0
-              const hasSubIndicators = indicator.sub_indicators && indicator.sub_indicators.length > 0
 
               if (hasSubIndicators || indRealisasi === 0) {
                 if (assessment?.score !== undefined && assessment.score !== null && assessment.score > 0) {
@@ -741,7 +747,8 @@ export default function AssessmentFormDialog({
 
               const isPriority = indicator.calculation_method === 'priority'
 
-              if (!isPriority) {
+              // Include priority indicators if category is unweighted (e.g. P3 Tugas Tambahan)
+              if (!isPriority || category.is_weighted === false) {
                 if (!isMedicalUnit && category.is_weighted !== false) {
                   totalRealisasiKategori += (indRealisasi * (indWeight / 100))
                   totalTargetKategori += (indTarget * (indWeight / 100))
@@ -769,7 +776,9 @@ export default function AssessmentFormDialog({
             }
 
             const poinAkhir = isMedicalUnit ? totalRealisasiKategori : kontribusiAkhir;
-            totalSkorIndeks += poinAkhir;
+            if (category.is_weighted !== false) {
+              totalSkorIndeks += poinAkhir;
+            }
 
             return (
               <Card key={catCode} className="border-gray-200">

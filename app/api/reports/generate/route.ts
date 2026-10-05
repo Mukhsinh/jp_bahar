@@ -1066,7 +1066,13 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
           if (def && def.m_kpi_categories?.category === categoryName && def.calculation_method !== 'priority' && def.m_kpi_categories?.configuration_style !== 'activity') {
             const rawTargetStr = def.target_value
             const indTarget = (rawTargetStr !== null && rawTargetStr !== undefined) ? parseFloat(rawTargetStr) : 100;
-            const indWeight = parseFloat(def.weight_percentage) || 0
+            let indWeight = parseFloat(def.weight_percentage) || 0
+
+            // If indicator weight is 0 but sub-indicators exist for it, fallback to 100
+            if (indWeight === 0) {
+              const subAggExists = subAssessments?.some((s: any) => s.indicator_id === indId)
+              if (subAggExists) indWeight = 100
+            }
 
             if (isWeightedCategory) {
               totalTargetKategori += (indTarget * (indWeight / 100))
@@ -1085,7 +1091,15 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
         const basicVal = parseFloat(a.m_kpi_indicators?.base_index_value) || 0
         const rawScore = a.score  // already weighted metric from DB
         const indName = a.m_kpi_indicators?.name || '-'
-        const indWeight = parseFloat(a.weight_percentage) || parseFloat(a.m_kpi_indicators?.weight_percentage) || 0
+        let indWeight = parseFloat(a.weight_percentage) || parseFloat(a.m_kpi_indicators?.weight_percentage) || 0
+
+        const subKey = `${empId}:${a.indicator_id}`
+        const subAgg = subScoreMap.get(subKey)
+
+        // Fix for parent indicator weight being 0 when sub-assessments exist
+        if (indWeight === 0 && subAgg !== undefined) {
+          indWeight = 100
+        }
 
         const rawTargetStr = a.target_value !== null ? a.target_value : a.m_kpi_indicators?.target_value;
         const indTarget = (rawTargetStr !== null && rawTargetStr !== undefined) ? parseFloat(rawTargetStr) : 100;
@@ -1094,8 +1108,6 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
         // Resolve effectiveScore: use subAgg realization (sum of volumes) to match frontend weighting structure naturally
         let effectiveScore: number
-        const subKey = `${empId}:${a.indicator_id}`
-        const subAgg = subScoreMap.get(subKey)
 
         if (subAgg !== undefined) {
           effectiveScore = subAgg.score
