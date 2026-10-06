@@ -1302,8 +1302,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       if (pir < 0) pir = 0;
     }
 
-    const roundedPir = Number(pir.toFixed(2));
-    unitPIRMap.set(uId, roundedPir)
+    unitPIRMap.set(uId, pir)
 
     // Save audit trail (using original field names)
     // Note: pir_value reflects the merit indices value, 
