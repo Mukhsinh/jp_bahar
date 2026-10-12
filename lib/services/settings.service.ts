@@ -49,7 +49,13 @@ export async function getSettings(): Promise<{ data: Settings | null; error: str
   // If running in browser, fetch via server-side API route which uses service role client to bypass RLS (e.g. on login page)
   if (typeof window !== 'undefined') {
     try {
-      const res = await fetch('/api/settings')
+      const res = await fetch(`/api/settings?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+        },
+      })
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`)
       }
@@ -76,7 +82,19 @@ export async function getSettings(): Promise<{ data: Settings | null; error: str
       }
       return { data: settings, error: null }
     } catch (err: any) {
-      console.error('Failed to fetch settings from API route:', err)
+      console.warn('Failed to fetch settings from API route, trying Supabase client fallback:', err)
+      // Fallback: If authenticated in browser, query Supabase directly
+      try {
+        const supabase = createClient()
+        const { data, error } = await supabase
+          .from('t_settings')
+          .select('key, value')
+        if (!error && data && data.length > 0) {
+          return { data: transformSettingsData(data), error: null }
+        }
+      } catch (fallbackErr) {
+        console.error('Supabase fallback failed:', fallbackErr)
+      }
       return { data: null, error: err.message || 'Failed to fetch settings' }
     }
   }
@@ -107,7 +125,13 @@ export async function getSetting(key: string): Promise<{ data: any | null; error
   // If running in browser, fetch all settings via the API route to bypass RLS and return the requested key
   if (typeof window !== 'undefined') {
     try {
-      const res = await fetch('/api/settings')
+      const res = await fetch(`/api/settings?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+        },
+      })
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`)
       }

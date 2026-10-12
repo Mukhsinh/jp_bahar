@@ -74,13 +74,32 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   // Refresh settings
   const refreshSettings = useCallback(async () => {
     settingsCache = null
+    cacheTimestamp = 0
     await loadSettings(true)
   }, [loadSettings])
 
-  // Simple initialization - load once when mounted
+  // Listen for external refresh triggers (e.g. from Settings page save)
   useEffect(() => {
-    if (typeof window !== 'undefined' && !settingsCache) {
-      loadSettings()
+    const handleRefresh = () => {
+      settingsCache = null
+      cacheTimestamp = 0
+      loadSettings(true)
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('sidebar-refresh', handleRefresh)
+      window.addEventListener('settings-updated', handleRefresh)
+      return () => {
+        window.removeEventListener('sidebar-refresh', handleRefresh)
+        window.removeEventListener('settings-updated', handleRefresh)
+      }
+    }
+  }, [loadSettings])
+
+  // Simple initialization - load on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      loadSettings(!settingsCache)
     }
   }, [loadSettings])
 

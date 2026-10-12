@@ -160,13 +160,26 @@ export default function Sidebar() {
   const pathname = usePathname()
   const { user, loading } = useAuth()
 
-  const { settings } = useSettings()
+  const { settings, refreshSettings } = useSettings()
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const [unitName, setUnitName] = useState('')
   const [unreadCount, setUnreadCount] = useState(0)
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [mounted, setMounted] = useState(false)
+
+  // Listen for settings or logo refresh events
+  useEffect(() => {
+    const handleRefresh = () => {
+      refreshSettings?.()
+    }
+    window.addEventListener('sidebar-refresh', handleRefresh)
+    window.addEventListener('settings-updated', handleRefresh)
+    return () => {
+      window.removeEventListener('sidebar-refresh', handleRefresh)
+      window.removeEventListener('settings-updated', handleRefresh)
+    }
+  }, [refreshSettings])
 
   // Persist collapsed state
   useEffect(() => {
@@ -273,10 +286,18 @@ export default function Sidebar() {
             {!isCollapsed && (
               <div className="flex items-center gap-4 min-w-0 animate-in">
                 <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl flex-shrink-0 overflow-hidden hover-scale border border-white/20">
-                  {companyInfo?.logo
-                    ? <img src={companyInfo.logo} alt="Logo" className="w-full h-full object-contain p-1" />
-                    : <span className="text-blue-600 font-bold text-2xl">G</span>
-                  }
+                  {companyInfo?.logo ? (
+                    <img
+                      key={companyInfo.logo}
+                      src={companyInfo.logo}
+                      alt={companyInfo?.appName || 'Logo'}
+                      className="w-full h-full object-contain p-1"
+                    />
+                  ) : (
+                    <span className="text-[#f97316] font-bold text-2xl">
+                      {(companyInfo?.appName || 'P').charAt(0)}
+                    </span>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <h1
@@ -293,10 +314,18 @@ export default function Sidebar() {
             )}
             {isCollapsed && (
               <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-xl mx-auto hover-scale border border-white/20 animate-in">
-                {companyInfo?.logo
-                  ? <img src={companyInfo.logo} alt="Logo" className="w-full h-full object-contain p-2" />
-                  : <span className="text-blue-600 font-bold text-xl">G</span>
-                }
+                {companyInfo?.logo ? (
+                  <img
+                    key={companyInfo.logo}
+                    src={companyInfo.logo}
+                    alt={companyInfo?.appName || 'Logo'}
+                    className="w-full h-full object-contain p-2"
+                  />
+                ) : (
+                  <span className="text-[#f97316] font-bold text-xl">
+                    {(companyInfo?.appName || 'P').charAt(0)}
+                  </span>
+                )}
               </div>
             )}
             <button

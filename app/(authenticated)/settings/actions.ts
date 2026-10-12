@@ -79,6 +79,9 @@ export async function saveSettings(
     }
   }
 
+  revalidatePath('/api/settings')
+  revalidatePath('/login')
+  revalidatePath('/dashboard')
   revalidatePath('/', 'layout')
   return { success: true, error: null }
 }

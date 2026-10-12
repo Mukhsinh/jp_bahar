@@ -11,6 +11,7 @@ import { Upload, Save, Image as ImageIcon, AlertCircle, FileDown, BookOpen, Info
 import { toast } from 'sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { saveSettings } from './actions'
+import { useSettings } from '@/lib/contexts/settings-context'
 
 interface Settings {
   app_name: string
@@ -49,6 +50,7 @@ interface Settings {
 }
 
 export default function SettingsPage() {
+  const { refreshSettings } = useSettings()
   const [settings, setSettings] = useState<Settings>({
     app_name: 'JASPEL',
     developer_name: '',
@@ -272,7 +274,9 @@ export default function SettingsPage() {
 
       // Clear sidebar cache and trigger refresh
       try { localStorage.removeItem('sidebar-company-info') } catch { }
+      try { await refreshSettings() } catch { }
       window.dispatchEvent(new Event('sidebar-refresh'))
+      window.dispatchEvent(new Event('settings-updated'))
 
       await loadSettings()
     } catch (error: any) {

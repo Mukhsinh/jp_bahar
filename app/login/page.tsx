@@ -18,7 +18,7 @@ function getErrorMessage(code: string | null): string | null {
 }
 
 function LoginForm() {
-  const { settings, loading: settingsLoading } = useSettings()
+  const { settings, loading: settingsLoading, refreshSettings } = useSettings()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -31,7 +31,8 @@ function LoginForm() {
     setIsMounted(true)
     const code = searchParams.get('error')
     if (code) setError(getErrorMessage(code))
-  }, [searchParams])
+    refreshSettings?.()
+  }, [searchParams, refreshSettings])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -82,22 +83,29 @@ function LoginForm() {
   }
 
   const companyInfo = settings?.companyInfo
-  const logoSrc = companyInfo?.logo || "/logo.png"
+  const logoSrc = companyInfo?.logo
   const orgName = companyInfo?.name || "RS Sungai Bahar"
 
   return (
     <div className="h-screen flex flex-col items-center justify-center bg-gray-50/50 p-2 font-sans overflow-hidden">
       {/* Header Section */}
       <div className="flex flex-col items-center mb-3">
-        <div className="w-16 h-16 bg-white rounded-full shadow-lg flex items-center justify-center overflow-hidden mb-1.5 border border-gray-100">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={logoSrc}
-            alt={orgName}
-            width={48}
-            height={48}
-            className="object-contain max-h-[48px] max-w-[48px]"
-          />
+        <div className="w-16 h-16 bg-white rounded-full shadow-lg flex items-center justify-center overflow-hidden mb-1.5 border border-gray-100 p-1.5">
+          {logoSrc ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              key={logoSrc}
+              src={logoSrc}
+              alt={orgName}
+              width={48}
+              height={48}
+              className="object-contain max-h-[48px] max-w-[48px]"
+            />
+          ) : (
+            <div className="w-full h-full bg-blue-600 rounded-full flex items-center justify-center text-white font-black text-xl">
+              {(orgName || 'JP').charAt(0)}
+            </div>
+          )}
         </div>
         <h1 className="text-xl font-extrabold text-gray-900 tracking-tight text-center m-0 uppercase max-w-[350px]">
           {orgName}
