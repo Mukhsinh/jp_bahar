@@ -21,6 +21,25 @@ interface Assessment {
 }
 
 /**
+ * Check if assessment period has been approved and locked
+ */
+async function isPeriodApproved(adminClient: any, period: string, revenueType: string = 'bpjs'): Promise<boolean> {
+  try {
+    const key = `assessment_approval_${period}_${revenueType}`
+    const { data } = await adminClient
+      .from('t_settings')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle()
+
+    return (data?.value as any)?.status === 'approved'
+  } catch (err) {
+    console.error('Error checking period approval:', err)
+    return false
+  }
+}
+
+/**
  * Find employee record for authenticated user.
  * Tries user_id first, then falls back to email match.
  */
@@ -436,6 +455,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Validate whether target period is already approved and locked
+    const samplePeriod = itemsToProcess[0]?.period
+    const sampleRevenueType = itemsToProcess[0]?.revenue_type || 'bpjs'
+    if (samplePeriod) {
+      const approved = await isPeriodApproved(adminClient, samplePeriod, sampleRevenueType)
+      if (approved) {
+        return NextResponse.json(
+          { error: `Periode penilaian ${samplePeriod} (${sampleRevenueType.toUpperCase()}) telah disetujui dan terkunci. Penilaian tidak dapat diedit atau ditambah.` },
+          { status: 403 }
+        )
+      }
+    }
+
     const results = []
     for (const item of itemsToProcess) {
       const assessmentItem: Assessment = {
@@ -591,6 +623,16 @@ export async function PUT(request: NextRequest) {
       assessor_id: currentEmployee.id
     }
 
+    if (assessment.period) {
+      const approved = await isPeriodApproved(adminClient, assessment.period, assessment.revenue_type || 'bpjs')
+      if (approved) {
+        return NextResponse.json(
+          { error: `Periode penilaian ${assessment.period} telah disetujui dan terkunci. Penilaian tidak dapat diubah.` },
+          { status: 403 }
+        )
+      }
+    }
+
     // Authorization check
     if (currentEmployee.role === 'unit_manager') {
       const { data: targetEmployee } = await adminClient
@@ -614,6 +656,129 @@ export async function PUT(request: NextRequest) {
     console.error('Assessment PUT error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to update assessment' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const supabase = await createClient()
+
+    // Check authentication
+    const user = await getAuthenticatedUser(supabase, request)
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const adminClient = await createAdminClient()
+    const currentEmployee = await findEmployeeForUser(adminClient, user.id, user)
+
+    if (!currentEmployee) {
+      return NextResponse.json({ error: 'Employee record not found' }, { status: 404 })
+    }
+
+    // Enforce RBAC: only superadmin or unit manager can reset
+    if (currentEmployee.role !== 'superadmin' && currentEmployee.role !== 'unit_manager') {
+      return NextResponse.json(
+        { error: 'Hanya superadmin atau manajer unit yang dapat mereset penilaian' },
+        { status: 403 }
+      )
+    }
+
+    const { searchParams } = new URL(request.url)
+    let employeeId = searchParams.get('employee_id')
+    let period = searchParams.get('period')
+    let revenueType = searchParams.get('revenue_type') || 'bpjs'
+    let resetBoth = searchParams.get('reset_both') === 'true'
+
+    // Also support JSON body if sent
+    if (!employeeId || !period) {
+      try {
+        const body = await request.json()
+        if (body.employee_id) employeeId = body.employee_id
+        if (body.period) period = body.period
+        if (body.revenue_type) revenueType = body.revenue_type
+        if (body.reset_both !== undefined) resetBoth = body.reset_both
+      } catch {
+        // Body was empty or non-JSON
+      }
+    }
+
+    if (!employeeId || !period) {
+      return NextResponse.json(
+        { error: 'employee_id and period are required' },
+        { status: 400 }
+      )
+    }
+
+    // Validate if period is already approved and locked
+    const approved = await isPeriodApproved(adminClient, period, revenueType)
+    if (approved) {
+      return NextResponse.json(
+        { error: `Periode penilaian ${period} (${revenueType.toUpperCase()}) telah disetujui dan terkunci. Penilaian tidak dapat direset.` },
+        { status: 403 }
+      )
+    }
+
+    // Authorization check for unit manager
+    if (currentEmployee.role === 'unit_manager') {
+      const { data: targetEmployee } = await adminClient
+        .from('m_employees')
+        .select('unit_id')
+        .eq('id', employeeId)
+        .single()
+
+      if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
+        return NextResponse.json(
+          { error: 'Anda hanya dapat mereset penilaian pegawai di unit Anda' },
+          { status: 403 }
+        )
+      }
+    }
+
+    // Delete records from t_kpi_assessments
+    let deleteQuery = adminClient
+      .from('t_kpi_assessments')
+      .delete()
+      .eq('employee_id', employeeId)
+      .eq('period', period)
+
+    if (resetBoth) {
+      // Deletes all revenue types for this employee and period
+    } else if (revenueType === 'umum') {
+      deleteQuery = deleteQuery.eq('revenue_type', 'umum')
+    } else {
+      // BPJS: delete both 'bpjs' and legacy null revenue_type
+      deleteQuery = deleteQuery.or('revenue_type.eq.bpjs,revenue_type.is.null')
+    }
+
+    const { error: deleteError } = await deleteQuery
+
+    if (deleteError) {
+      console.error('Assessment reset error:', deleteError)
+      return NextResponse.json(
+        { error: `Gagal mereset penilaian: ${deleteError.message}` },
+        { status: 500 }
+      )
+    }
+
+    // Simple audit logging
+    await logAssessmentAudit(
+      'UPDATE',
+      `${employeeId}_${period}_${revenueType}`,
+      `Reset KPI assessment for employee ${employeeId} in period ${period} (${revenueType})`,
+      adminClient
+    )
+
+    return NextResponse.json({
+      success: true,
+      message: 'Penilaian pegawai berhasil direset dan dikosongkan kembali'
+    })
+  } catch (error: any) {
+    console.error('Assessment DELETE error:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to reset assessment' },
       { status: 500 }
     )
   }

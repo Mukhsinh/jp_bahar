@@ -87,17 +87,27 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
     const validCategoryIds = validCategories.map((c: any) => c.id)
     const catToUnitMap = new Map(validCategories.map((c: any) => [c.id, c.unit_id]))
 
-    let indicatorCountMap: Record<string, number> = {}
+    let requiredIndicatorCountMap: Record<string, number> = {}
+    let priorityIndicatorIds = new Set<string>()
+    let allIndicatorCountMap: Record<string, number> = {}
+
     if (validCategoryIds.length > 0) {
       const { data: validIndicators } = await supabase
         .from('m_kpi_indicators')
-        .select('id, category_id')
+        .select('id, category_id, calculation_method')
         .eq('is_active', true)
         .in('category_id', validCategoryIds)
 
       validIndicators?.forEach((ind: any) => {
         const uId = catToUnitMap.get(ind.category_id) as string
-        if (uId) indicatorCountMap[uId] = (indicatorCountMap[uId] || 0) + 1
+        if (uId) {
+          allIndicatorCountMap[uId] = (allIndicatorCountMap[uId] || 0) + 1
+          if (ind.calculation_method === 'priority') {
+            priorityIndicatorIds.add(ind.id)
+          } else {
+            requiredIndicatorCountMap[uId] = (requiredIndicatorCountMap[uId] || 0) + 1
+          }
+        }
       })
     }
 
@@ -141,20 +151,47 @@ async function getAssessmentStatus(supabase: any, unitIdFilter: string | null, p
       }
     }
 
-
     result = directEmps
       .filter((emp: any) =>
         (emp.m_units as any)?.code !== 'ADMIN' &&
         (emp.m_units as any)?.name !== 'SUPERADMIN'
       )
       .map((emp: any) => {
-        const totalInd = indicatorCountMap[emp.unit_id] || 0
-        const assessedInd = assessedCountMap[emp.id]?.size || 0
+        const reqTotal = requiredIndicatorCountMap[emp.unit_id] || 0
+        const allAssessed = assessedCountMap[emp.id] || new Set()
+
+        let assessedReq = 0
+        let assessedPrio = 0
+        allAssessed.forEach((indId: string) => {
+          if (priorityIndicatorIds.has(indId)) {
+            assessedPrio++
+          } else {
+            assessedReq++
+          }
+        })
+
+        const totalAssessed = assessedReq + assessedPrio
+
+        // Priority indicators are elective / optional:
+        // An employee is considered 'Selesai' when all required indicators are assessed,
+        // regardless of whether priority indicators were chosen or not.
+        const isCompleted = reqTotal > 0 ? (assessedReq >= reqTotal) : (assessedPrio > 0)
+
+        const totalInd = reqTotal > 0 ? (reqTotal + assessedPrio) : (allIndicatorCountMap[emp.unit_id] || 0)
+        const assessedInd = totalAssessed
+
         let empStatus = 'Belum Dinilai'
-        if (assessedInd > 0) {
-          empStatus = (totalInd > 0 && assessedInd >= totalInd) ? 'Selesai' : 'Sebagian'
+        let completionPct = 0
+
+        if (totalAssessed > 0) {
+          if (isCompleted) {
+            empStatus = 'Selesai'
+            completionPct = 100
+          } else {
+            empStatus = 'Sebagian'
+            completionPct = reqTotal > 0 ? Math.min(99, Math.round((assessedReq / reqTotal) * 100)) : 50
+          }
         }
-        const completionPct = totalInd > 0 ? Math.round((assessedInd / totalInd) * 100) : 0
 
         return {
           employee_id: emp.id,

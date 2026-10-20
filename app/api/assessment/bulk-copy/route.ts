@@ -39,6 +39,19 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Forbidden: Insufficient permissions' }, { status: 403 })
         }
 
+        // Check if current_period is approved and locked
+        const { data: bpjsApproval } = await adminClient
+            .from('t_settings')
+            .select('value')
+            .eq('key', `assessment_approval_${current_period}_bpjs`)
+            .maybeSingle()
+
+        if ((bpjsApproval?.value as any)?.status === 'approved') {
+            return NextResponse.json({
+                error: `Periode tujuan ${current_period} telah disetujui dan terkunci. Tidak dapat menyalin atau mengubah data penilaian.`
+            }, { status: 403 })
+        }
+
         // 1. Get all employees in this unit
         const { data: employees } = await adminClient
             .from('m_employees')

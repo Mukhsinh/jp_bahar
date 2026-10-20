@@ -249,6 +249,53 @@ export async function deletePegawai(id: string): Promise<{ success: boolean; err
 }
 
 /**
+ * Server action to toggle active status of pegawai
+ */
+export async function setPegawaiActiveStatus(id: string, isActive: boolean): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient()
+
+    // Verify user is superadmin or unit manager
+    const { data: { user } } = await supabase.auth.getUser()
+    const authRole = user?.app_metadata?.role || user?.user_metadata?.role
+    const isSuperAdmin = authRole === 'superadmin' || user?.email === 'admin@sungaibahar.com'
+    const isUnitManager = authRole === 'unit_manager'
+
+    if (!user || (!isSuperAdmin && !isUnitManager)) {
+      return { success: false, error: 'Tidak memiliki akses' }
+    }
+
+    const adminSupabase = await createAdminClient()
+
+    let updateQuery = adminSupabase
+      .from('m_employees')
+      .update({
+        is_active: isActive,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+
+    if (isUnitManager) {
+      updateQuery = updateQuery.eq('unit_id', user.user_metadata?.unit_id)
+    }
+
+    const { error } = await updateQuery
+
+    if (error) {
+      console.error('setPegawaiActiveStatus error:', error)
+      return { success: false, error: error.message }
+    }
+
+    revalidatePath('/pegawai')
+    revalidatePath('/assessment')
+    return { success: true }
+  } catch (err: any) {
+    console.error('setPegawaiActiveStatus error:', err)
+    return { success: false, error: err.message || 'Terjadi kesalahan' }
+  }
+}
+
+/**
  * Server action to get all units for dropdown
  */
 export async function getUnitsForDropdown(): Promise<{ data: Array<{ id: string; name: string }>; error?: string }> {

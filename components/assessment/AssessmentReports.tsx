@@ -67,17 +67,12 @@ export default function AssessmentReports({
 
   // Sync selected period from props if it changes
   useEffect(() => {
-    if (propSelectedPeriod && propSelectedPeriod !== selectedPeriod) {
-      setSelectedPeriod(propSelectedPeriod)
-    }
+    setSelectedPeriod(propSelectedPeriod || '')
   }, [propSelectedPeriod])
 
   useEffect(() => {
     if (propAvailablePeriods && propAvailablePeriods.length > 0) {
       setPeriods(propAvailablePeriods)
-      if (!selectedPeriod && !propSelectedPeriod && propAvailablePeriods.length > 0) {
-        setSelectedPeriod(propAvailablePeriods[0])
-      }
     } else {
       fetchAvailablePeriods()
     }
@@ -258,7 +253,7 @@ export default function AssessmentReports({
         <div className="flex-1">
           <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
             <SelectTrigger>
-              <SelectValue placeholder="Pilih periode" />
+              <SelectValue placeholder="-- Pilih Periode Penilaian --" />
             </SelectTrigger>
             <SelectContent>
               {periods.map((period) => (
@@ -270,7 +265,7 @@ export default function AssessmentReports({
           </Select>
         </div>
         <div className="flex-1">
-          <Select value={selectedUnit} onValueChange={setSelectedUnit}>
+          <Select value={selectedUnit} onValueChange={setSelectedUnit} disabled={!selectedPeriod}>
             <SelectTrigger>
               <SelectValue placeholder="Pilih unit" />
             </SelectTrigger>
@@ -286,7 +281,17 @@ export default function AssessmentReports({
         </div>
       </div>
 
-      {reportData && (
+      {!selectedPeriod ? (
+        <div className="flex flex-col items-center justify-center p-12 text-center border-2 border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+          <div className="bg-blue-50 p-3 rounded-full mb-3 text-blue-600">
+            <Users className="h-8 w-8" />
+          </div>
+          <h3 className="text-lg font-bold text-gray-900 mb-1">Pilih Periode Penilaian</h3>
+          <p className="text-sm text-gray-500 max-w-sm mx-auto">
+            Silakan pilih periode penilaian pada dropdown di atas untuk memuat laporan statistik dan grafik kinerja.
+          </p>
+        </div>
+      ) : reportData ? (
         <>
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -472,7 +477,7 @@ export default function AssessmentReports({
             </TabsContent>
           </Tabs>
         </>
-      )}
+      ) : null}
     </div>
   )
 }

@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Save, AlertCircle, Target, TrendingUp, Copy, LayoutDashboard, CheckCircle2, Loader2 } from 'lucide-react'
+import { Save, AlertCircle, Target, TrendingUp, Copy, LayoutDashboard, CheckCircle2, Loader2, Lock, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { Progress } from '@/components/ui/progress'
@@ -91,6 +91,7 @@ interface AssessmentFormDialogProps {
   employee: AssessmentStatus
   period: string
   revenueType?: 'bpjs' | 'umum'
+  readOnly?: boolean
   onSaved: (continueToUmum?: boolean) => void
 }
 
@@ -100,12 +101,14 @@ export default function AssessmentFormDialog({
   employee,
   period,
   revenueType = 'bpjs',
+  readOnly = false,
   onSaved
 }: AssessmentFormDialogProps) {
   const [categories, setCategories] = useState<KPICategory[]>([])
   const [assessments, setAssessments] = useState<Record<string, AssessmentData>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [copyingPrevious, setCopyingPrevious] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -446,6 +449,43 @@ export default function AssessmentFormDialog({
     }
   }
 
+  const handleResetAssessment = async () => {
+    if (readOnly) return
+
+    const confirmMsg = activeRevenueType === 'bpjs' && applyToUmum
+      ? `Apakah Anda yakin ingin mereset penilaian KPI untuk ${employee.full_name} pada periode ${period}?\n\nSemua nilai penilaian pegawai ini (BPJS Kesehatan & UMUM) akan dikosongkan kembali dan siap untuk dinilai ulang.`
+      : `Apakah Anda yakin ingin mereset penilaian KPI untuk ${employee.full_name} pada periode ${period} (${activeRevenueType.toUpperCase()})?\n\nSemua nilai penilaian pegawai ini akan dikosongkan kembali dan siap untuk dinilai ulang.`
+
+    if (!window.confirm(confirmMsg)) {
+      return
+    }
+
+    setResetting(true)
+    setError(null)
+
+    try {
+      const url = `/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${activeRevenueType}${activeRevenueType === 'bpjs' && applyToUmum ? '&reset_both=true' : ''}`
+      const response = await fetch(url, {
+        method: 'DELETE'
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Gagal mereset penilaian')
+      }
+
+      setAssessments({})
+      toast.success(`Penilaian untuk ${employee.full_name} berhasil dikosongkan dan siap dinilai ulang.`)
+      onSaved(false)
+    } catch (err: any) {
+      console.error('Error resetting assessment:', err)
+      setError(err instanceof Error ? err.message : 'Gagal mereset penilaian')
+      toast.error('Gagal mereset penilaian: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const handleCopyPrevious = async () => {
     setCopyingPrevious(true)
     setError(null)
@@ -584,21 +624,33 @@ export default function AssessmentFormDialog({
                 Periode: {period} • Unit: {employee.unit_name}
               </DialogDescription>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 font-semibold shadow-sm"
-              onClick={handleCopyPrevious}
-              disabled={saving || copyingPrevious || loading}
-            >
-              {copyingPrevious ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Copy className="h-4 w-4 mr-2" />
-              )}
-              {copyingPrevious ? 'Menyalin & Menyimpan...' : 'Salin Penilaian Sebelumnya'}
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 font-semibold shadow-sm"
+                onClick={handleCopyPrevious}
+                disabled={saving || copyingPrevious || loading}
+              >
+                {copyingPrevious ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Copy className="h-4 w-4 mr-2" />
+                )}
+                {copyingPrevious ? 'Menyalin & Menyimpan...' : 'Salin Penilaian Sebelumnya'}
+              </Button>
+            )}
           </div>
+
+          {readOnly && (
+            <div className="mt-3 bg-emerald-50 border border-emerald-300 text-emerald-900 rounded-lg p-3 flex items-center gap-3">
+              <Lock className="h-5 w-5 text-emerald-700 flex-shrink-0" />
+              <div className="text-xs">
+                <span className="font-bold">Periode Penilaian Telah Disetujui (Mode Hanya Lihat)</span>
+                <p className="text-emerald-700">Periode {period} telah disetujui resmi dan dikunci. Data penilaian KPI tidak dapat diedit atau diubah.</p>
+              </div>
+            </div>
+          )}
 
           {kpiSchemaMode === 'different' && (
             <div className="mt-3 flex items-center gap-2 border-t pt-3">
@@ -638,9 +690,17 @@ export default function AssessmentFormDialog({
 
         {/* Real-time Recapitulation & Progress */}
         {!loading && categories.length > 0 && (() => {
-          const totalInd = categories.flatMap(c => c.indicators).length
-          const filledInd = Object.keys(assessments).length
-          const pct = totalInd > 0 ? (filledInd / totalInd) * 100 : 0
+          const allInds = categories.flatMap(c => c.indicators)
+          const reqInds = allInds.filter(i => i.calculation_method !== 'priority')
+          const prioInds = allInds.filter(i => i.calculation_method === 'priority')
+
+          const filledReq = reqInds.filter(i => assessments[i.id]).length
+          const filledPrio = prioInds.filter(i => assessments[i.id]).length
+
+          const totalInd = reqInds.length > 0 ? (reqInds.length + filledPrio) : allInds.length
+          const filledInd = filledReq + filledPrio
+          const isCompleted = reqInds.length > 0 ? (filledReq >= reqInds.length) : (filledPrio > 0)
+          const pct = isCompleted ? 100 : (totalInd > 0 ? Math.round((filledInd / totalInd) * 100) : 0)
 
           let totalSkorIndeks = 0;
           let totalSkorPrioritas = 0;
@@ -952,9 +1012,14 @@ export default function AssessmentFormDialog({
                             {!isMedicalUnit && (
                               <div className="flex gap-2 ml-4">
                                 {indicator.calculation_method === 'priority' ? (
-                                  <Badge variant="default" className="bg-purple-600">
-                                    Prioritas
-                                  </Badge>
+                                  <div className="flex items-center gap-1.5">
+                                    <Badge variant="default" className="bg-purple-600 hover:bg-purple-700 text-white">
+                                      Prioritas
+                                    </Badge>
+                                    <Badge variant="outline" className="border-purple-300 text-purple-700 bg-purple-50 text-[10px]">
+                                      Opsional / Elektif
+                                    </Badge>
+                                  </div>
                                 ) : (
                                   category.is_weighted !== false && (
                                     <Badge variant="outline">
@@ -984,6 +1049,7 @@ export default function AssessmentFormDialog({
                                   id={`realization-${indicator.id}`}
                                   type="number"
                                   step="0.0001"
+                                  disabled={readOnly}
                                   value={realizationValue || ''}
                                   onChange={(e) => handleRealizationChange(indicator.id, e.target.value, indicator.target_value)}
                                   placeholder="0.0000"
@@ -1071,6 +1137,7 @@ export default function AssessmentFormDialog({
                                                         type="number"
                                                         step="0.0001"
                                                         placeholder="Vol"
+                                                        disabled={readOnly}
                                                         className="h-7 text-xs"
                                                         onChange={(e) => {
                                                           const vol = parseFloat(e.target.value) || 0
@@ -1108,6 +1175,7 @@ export default function AssessmentFormDialog({
                                                 <Input
                                                   type="number"
                                                   step="0.0001"
+                                                  disabled={readOnly}
                                                   className="h-8 text-sm bg-white"
                                                   placeholder="0.0000"
                                                   value={subRealization || ''}
@@ -1140,6 +1208,7 @@ export default function AssessmentFormDialog({
                                             <Button
                                               key={cIdx}
                                               type="button"
+                                              disabled={readOnly}
                                               variant={subRealization === criterion.score ? 'default' : 'outline'}
                                               size="sm"
                                               className="h-8 text-xs px-2"
@@ -1154,6 +1223,7 @@ export default function AssessmentFormDialog({
                                           <Label className="text-[10px] text-gray-500 mb-1 block">Input Nilai Pencapaian (%)</Label>
                                           <Input
                                             type="number"
+                                            disabled={readOnly}
                                             className="h-8 text-sm mt-1 bg-white"
                                             placeholder="Ketik nilai..."
                                             value={subRealization || ''}
@@ -1179,6 +1249,7 @@ export default function AssessmentFormDialog({
                             </Label>
                             <Textarea
                               id={`notes-${indicator.id}`}
+                              disabled={readOnly}
                               value={assessment?.notes || ''}
                               onChange={(e) => handleNotesChange(indicator.id, e.target.value)}
                               placeholder="Tambahkan catatan penilaian..."
@@ -1197,7 +1268,12 @@ export default function AssessmentFormDialog({
         </div>
 
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pt-4 border-t w-full">
-          {activeRevenueType === 'bpjs' ? (
+          {readOnly ? (
+            <div className="flex items-center gap-2 bg-emerald-50 text-emerald-900 border border-emerald-300 px-3 py-2 rounded-lg text-xs font-semibold">
+              <Lock className="h-4 w-4 text-emerald-600" />
+              Periode Penilaian Telah Disetujui (Terkunci) • Mode Hanya-Lihat
+            </div>
+          ) : activeRevenueType === 'bpjs' ? (
             <div className="flex items-center gap-2 bg-blue-50/70 text-blue-900 border border-blue-200 px-3 py-2 rounded-lg text-xs font-medium">
               <input
                 type="checkbox"
@@ -1215,27 +1291,55 @@ export default function AssessmentFormDialog({
               • Penilaian ini khusus untuk Pendapatan UMUM (Pool UMUM & Proporsi UMUM)
             </div>
           )}
-          <div className="flex gap-2 self-end sm:self-auto">
-            <Button variant="outline" onClick={onClose} disabled={saving}>
-              Batal
-            </Button>
-            {activeRevenueType === 'bpjs' ? (
-              applyToUmum ? (
-                <Button onClick={() => handleSave(false)} disabled={saving || loading}>
-                  <Save className="h-4 w-4 mr-2" />
-                  {saving ? 'Menyimpan...' : 'Simpan BPJS Kesehatan dan UMUM Sekaligus'}
-                </Button>
-              ) : (
-                <Button onClick={() => handleSave(true)} disabled={saving || loading}>
-                  <Save className="h-4 w-4 mr-2" />
-                  {saving ? 'Menyimpan...' : 'Simpan BPJS Kesehatan kemudian Lanjut UMUM'}
-                </Button>
-              )
-            ) : (
-              <Button onClick={() => handleSave(false)} disabled={saving || loading}>
-                <Save className="h-4 w-4 mr-2" />
-                {saving ? 'Menyimpan...' : 'Simpan KPI UMUM'}
+          <div className="flex flex-wrap gap-2 self-end sm:self-auto items-center">
+            {readOnly ? (
+              <Button variant="default" onClick={onClose} className="bg-slate-800 hover:bg-slate-900">
+                Tutup
               </Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={onClose} disabled={saving || resetting}>
+                  Batal
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleResetAssessment}
+                  disabled={saving || loading || resetting}
+                  className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-400 gap-1.5"
+                  title="Kosongkan seluruh nilai penilaian pegawai ini untuk dinilai ulang"
+                >
+                  {resetting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin text-red-600" />
+                      Mereset...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="h-4 w-4 text-red-600" />
+                      Reset Penilaian
+                    </>
+                  )}
+                </Button>
+                {activeRevenueType === 'bpjs' ? (
+                  applyToUmum ? (
+                    <Button onClick={() => handleSave(false)} disabled={saving || loading || resetting}>
+                      <Save className="h-4 w-4 mr-2" />
+                      {saving ? 'Menyimpan...' : 'Simpan BPJS Kesehatan dan UMUM Sekaligus'}
+                    </Button>
+                  ) : (
+                    <Button onClick={() => handleSave(true)} disabled={saving || loading || resetting}>
+                      <Save className="h-4 w-4 mr-2" />
+                      {saving ? 'Menyimpan...' : 'Simpan BPJS Kesehatan kemudian Lanjut UMUM'}
+                    </Button>
+                  )
+                ) : (
+                  <Button onClick={() => handleSave(false)} disabled={saving || loading || resetting}>
+                    <Save className="h-4 w-4 mr-2" />
+                    {saving ? 'Menyimpan...' : 'Simpan KPI UMUM'}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, memo } from 'react'
-import { deactivatePegawai, deletePegawai } from '@/lib/services/pegawai.service'
+import { activatePegawai, deactivatePegawai, deletePegawai } from '@/lib/services/pegawai.service'
 import { Button } from '@/components/ui/button'
-import { Edit, Ban, CheckCircle, Trash2 } from 'lucide-react'
+import { Edit, Ban, CheckCircle, Trash2, CheckCircle2 } from 'lucide-react'
 import type { Pegawai } from '@/lib/types/database.types'
 
 interface PegawaiTableProps {
@@ -27,6 +27,23 @@ export const PegawaiTable = memo(function PegawaiTable({ pegawai, loading, onEdi
 
     if (result.success) {
       alert('Pegawai berhasil dinonaktifkan')
+      onRefresh()
+    } else {
+      alert(`Gagal: ${result.error}`)
+    }
+  }
+
+  const handleActivate = async (pegawai: Pegawai) => {
+    if (!confirm(`Apakah Anda yakin ingin mengaktifkan kembali ${pegawai.full_name}?`)) {
+      return
+    }
+
+    setActionLoading(pegawai.id)
+    const result = await activatePegawai(pegawai.id)
+    setActionLoading(null)
+
+    if (result.success) {
+      alert('Pegawai berhasil diaktifkan kembali')
       onRefresh()
     } else {
       alert(`Gagal: ${result.error}`)
@@ -137,16 +154,27 @@ export const PegawaiTable = memo(function PegawaiTable({ pegawai, loading, onEdi
                   >
                     <Edit className="h-4 w-4" />
                   </Button>
-                  {p.is_active && (
+                  {p.is_active ? (
                     <Button
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                       onClick={() => handleDeactivate(p)}
                       disabled={actionLoading === p.id}
-                      title="Nonaktifkan"
+                      title="Nonaktifkan Pegawai"
                     >
                       <Ban className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                      onClick={() => handleActivate(p)}
+                      disabled={actionLoading === p.id}
+                      title="Aktifkan Kembali Pegawai"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
                     </Button>
                   )}
                   <Button
