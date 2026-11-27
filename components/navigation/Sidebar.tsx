@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { usePathname } from 'next/navigation'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { OptimizedLink } from '@/components/ui/optimized-link'
 import { createClient } from '@/lib/supabase/client'
 import { useSettings } from '@/lib/contexts/settings-context'
@@ -57,6 +57,7 @@ interface SidebarInnerProps {
   setShowLogoutDialog: (s: boolean) => void
   handleLogout: () => Promise<void>
   isActive: (path: string) => boolean
+  onHoverRoute: (path: string) => void
   menuItems: MenuItem[]
 }
 
@@ -129,6 +130,7 @@ const SidebarInner = React.memo(function SidebarInner({
   setShowLogoutDialog,
   handleLogout,
   isActive,
+  onHoverRoute,
   menuItems
 }: SidebarInnerProps) {
   return (
@@ -215,7 +217,9 @@ const SidebarInner = React.memo(function SidebarInner({
             <OptimizedLink
               key={item.id}
               href={item.path}
-              prefetch={true}
+              prefetch={false}
+              onMouseEnter={() => onHoverRoute(item.path)}
+              onFocus={() => onHoverRoute(item.path)}
               onClick={() => setIsMobileOpen(false)}
               className={cn(
                 'w-full flex items-center gap-4 px-4 py-2 rounded-xl transition-all duration-300 group hover-scale',
@@ -371,6 +375,8 @@ function useAuth() {
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
+  const prefetchedRoutesRef = useRef<Set<string>>(new Set())
   const { user, loading } = useAuth()
 
   const { settings, refreshSettings } = useSettings()
@@ -454,6 +460,16 @@ export default function Sidebar() {
     [pathname]
   )
 
+  // Prefetch a single route lazily on hover/focus (avoids 11-way burst prefetch on mount)
+  const handleHoverRoute = useCallback(
+    (path: string) => {
+      if (path === pathname || prefetchedRoutesRef.current.has(path)) return
+      prefetchedRoutesRef.current.add(path)
+      router.prefetch(path)
+    },
+    [pathname, router]
+  )
+
   const menuItems = useMemo(() => (user ? getMenuItems(user.role) : []), [user])
   const noop = useCallback(() => { }, [])
 
@@ -498,6 +514,7 @@ export default function Sidebar() {
             setShowLogoutDialog={setShowLogoutDialog}
             handleLogout={handleLogout}
             isActive={isActive}
+            onHoverRoute={handleHoverRoute}
             menuItems={menuItems}
           />
         )}
@@ -524,6 +541,7 @@ export default function Sidebar() {
             setShowLogoutDialog={setShowLogoutDialog}
             handleLogout={handleLogout}
             isActive={isActive}
+            onHoverRoute={handleHoverRoute}
             menuItems={menuItems}
           />
         )}

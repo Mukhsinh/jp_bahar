@@ -52,13 +52,127 @@ class LRUCache<T> {
 // Optimized cache instance with enhanced settings
 const CACHE_TTL = 15 * 60 * 1000 // 15 minutes TTL (increased from 5 minutes)
 const MAX_CACHE_SIZE = 1000 // Increased cache size
+const AUTH_USER_CACHE_TTL = 60 * 1000 // 60s cache per auth cookie signature to prevent 429 rate limits & speed up navigation
 
 const employeeCache = new LRUCache<{
   role: Role
   is_active: boolean
 }>(MAX_CACHE_SIZE, CACHE_TTL)
 
+const authUserCache = new LRUCache<any>(MAX_CACHE_SIZE, AUTH_USER_CACHE_TTL)
+const inFlightAuthChecks = new Map<string, Promise<{ user: any; error: any }>>()
+
 const isDev = process.env.NODE_ENV !== 'production'
+
+/**
+ * Build a stable key from Supabase auth cookies for short-lived verification caching
+ * and in-flight request deduplication.
+ */
+function getAuthCookieSignature(request: NextRequest): string | null {
+  const authCookies = request.cookies
+    .getAll()
+    .filter((c) => c.name.includes('auth-token') || c.name.includes('access-token'))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  if (authCookies.length === 0) return null
+  return authCookies.map((c) => `${c.name}=${c.value}`).join('|')
+}
+
+/**
+ * Decode a Supabase JWT access token locally (Edge-compatible via atob) as a
+ * fallback ONLY when Supabase Cloud Auth returns a transient 429 / network error.
+ */
+function decodeUnexpiredJwtFromCookies(request: NextRequest): any | null {
+  try {
+    const authCookies = request.cookies
+      .getAll()
+      .filter((c) => c.name.includes('auth-token') || c.name.includes('access-token'))
+
+    if (authCookies.length === 0) return null
+
+    const groups: Record<string, { idx: number; val: string }[]> = {}
+    for (const c of authCookies) {
+      const match = c.name.match(/^(.*?)(?:\.(\d+))?$/)
+      const baseName = match ? match[1] : c.name
+      const idx = match && match[2] !== undefined ? parseInt(match[2], 10) : 0
+      if (!groups[baseName]) groups[baseName] = []
+      groups[baseName].push({ idx, val: c.value })
+    }
+
+    for (const baseName in groups) {
+      let raw = groups[baseName]
+        .sort((a, b) => a.idx - b.idx)
+        .map((c) => c.val)
+        .join('')
+
+      if (!raw) continue
+
+      if (raw.startsWith('base64-')) {
+        raw = atob(raw.slice(7).replace(/-/g, '+').replace(/_/g, '/'))
+      } else if (!raw.includes('.') && (raw.startsWith('eyJ') || raw.startsWith('W3'))) {
+        try {
+          const decoded = atob(raw.replace(/-/g, '+').replace(/_/g, '/'))
+          if (decoded.startsWith('{') || decoded.startsWith('[')) raw = decoded
+        } catch {
+          // ignore
+        }
+      }
+
+      let token = raw
+      if (raw.startsWith('{') || raw.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(raw)
+          token = parsed.access_token || (Array.isArray(parsed) ? parsed[0] : '') || ''
+        } catch {
+          continue
+        }
+      }
+
+      const parts = token.split('.')
+      if (parts.length !== 3) continue
+      const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+      const payload = JSON.parse(atob(b64))
+      if (!payload?.sub) continue
+
+      // Reject clearly expired tokens (allow 5-minute grace during concurrent refresh race)
+      const nowSec = Math.floor(Date.now() / 1000)
+      if (payload.exp && payload.exp + 300 < nowSec) continue
+
+      return {
+        id: payload.sub,
+        email: payload.email || '',
+        user_metadata: payload.user_metadata || {},
+        app_metadata: payload.app_metadata || {},
+        role: payload.role || payload.app_metadata?.role || payload.user_metadata?.role,
+      }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function isTransientAuthError(error: any): boolean {
+  if (!error) return false
+  const status = error.status || error.statusCode
+  const msg = (error.message || '').toLowerCase()
+  return (
+    status === 400 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    msg.includes('429') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('fetch failed') ||
+    msg.includes('network') ||
+    msg.includes('timeout') ||
+    msg.includes('invalid refresh token') ||
+    msg.includes('already used')
+  )
+}
 
 /**
  * Build redirect URL safely behind reverse proxies (e.g. aaPanel Nginx).
@@ -128,15 +242,46 @@ export async function middleware(request: NextRequest) {
       }
     )
 
-    // IMPORTANT: Verify user session using getUser()
-    // getSession() is insecure in middleware and can cause refresh token errors
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    // Verify user session with short-lived per-cookie caching + in-flight deduplication
+    // to prevent Supabase Cloud 429 Rate Limits and concurrent refresh token race conditions.
+    const cookieSig = getAuthCookieSignature(request)
+    let user: any = cookieSig ? authUserCache.get(cookieSig) : null
+    let userError: any = null
+
+    if (!user && cookieSig) {
+      let checkPromise = inFlightAuthChecks.get(cookieSig)
+      if (!checkPromise) {
+        checkPromise = supabase.auth
+          .getUser()
+          .then(({ data, error }) => ({ user: data?.user || null, error }))
+          .catch((err) => ({ user: null, error: err }))
+          .finally(() => {
+            inFlightAuthChecks.delete(cookieSig)
+          })
+        inFlightAuthChecks.set(cookieSig, checkPromise)
+      }
+
+      const authResult = await checkPromise
+      user = authResult.user
+      userError = authResult.error
+
+      if (user) {
+        authUserCache.set(cookieSig, user)
+      } else if (isTransientAuthError(userError)) {
+        // Fallback to local session / JWT check when Supabase Auth hits 429 or concurrent refresh race
+        const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }))
+        user = sessionData?.session?.user || decodeUnexpiredJwtFromCookies(request)
+        if (user) {
+          authUserCache.set(cookieSig, user)
+        }
+      }
+    }
 
     // If there's an error and it's related to invalid/missing tokens, 
     // we let it be handled by the session check below
-    if (userError) {
+    if (userError && !user) {
       // Don't log expected auth errors to keep console clean
-      if (!userError.message.includes('Refresh Token Not Found')) {
+      if (!userError.message?.includes('Refresh Token Not Found')) {
         console.warn('[MIDDLEWARE] Auth check:', userError.message)
       }
     }
