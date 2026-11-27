@@ -105,14 +105,12 @@ export async function GET(request: NextRequest) {
 
     const revenueType = searchParams.get('revenue_type') || 'bpjs'
     let employeesData: AssessmentStatus[] = []
-
-    // 1. Get SUPERADMIN unit ID to exclude
-    const { data: adminUnit } = await adminClient
-      .from('m_units')
-      .select('id')
-      .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
-      .maybeSingle()
-    const adminUnitId = adminUnit?.id
+    const effectiveUnitFilter =
+      userRole === 'unit_manager' && userUnitId
+        ? userUnitId
+        : userRole === 'superadmin' && requestedUnitId && requestedUnitId !== 'all'
+          ? requestedUnitId
+          : null
 
     let empQuery = adminClient
       .from('m_employees')
@@ -122,34 +120,52 @@ export async function GET(request: NextRequest) {
           unit_id,
           role,
           m_units!inner (
-            name
+            name,
+            code
           )
         `)
       .eq('is_active', true)
       .neq('role', 'superadmin')
 
-    // Exclude SUPERADMIN unit
-    if (adminUnitId) {
-      empQuery = empQuery.neq('unit_id', adminUnitId)
+    if (effectiveUnitFilter) {
+      empQuery = empQuery.eq('unit_id', effectiveUnitFilter)
     }
 
-    if (userRole === 'unit_manager' && userUnitId) {
-      empQuery = empQuery.eq('unit_id', userUnitId)
-    } else if (userRole === 'superadmin' && requestedUnitId && requestedUnitId !== 'all') {
-      empQuery = empQuery.eq('unit_id', requestedUnitId)
+    let catQuery = adminClient
+      .from('m_kpi_categories')
+      .select('id, unit_id, revenue_type')
+      .eq('is_active', true)
+
+    if (effectiveUnitFilter) {
+      catQuery = catQuery.eq('unit_id', effectiveUnitFilter)
     }
 
-    const { data: directEmps, error: directErr } = await empQuery.order('full_name')
+    // Run independent metadata queries in parallel instead of 4 sequential round-trips
+    const [
+      { data: unitsData },
+      { data: rawDirectEmps, error: directErr },
+      { data: categoriesData },
+    ] = await Promise.all([
+      adminClient.from('m_units').select('id, code, name, kpi_schema_mode'),
+      empQuery.order('full_name'),
+      catQuery,
+    ])
 
-    if (!directErr && directEmps) {
-      // Step 1: Preload kpi unit schemas and active categories
-      const { data: unitsData } = await adminClient.from('m_units').select('id, kpi_schema_mode')
-      const unitSchemaMap = new Map((unitsData || []).map(u => [u.id, u.kpi_schema_mode]))
+    const adminUnitIds = new Set(
+      (unitsData || [])
+        .filter((u: any) => u.code?.toUpperCase() === 'ADMIN' || u.name?.toUpperCase() === 'SUPERADMIN')
+        .map((u: any) => u.id)
+    )
 
-      const { data: categoriesData } = await adminClient
-        .from('m_kpi_categories')
-        .select('id, unit_id, revenue_type')
-        .eq('is_active', true)
+    const directEmps = (rawDirectEmps || []).filter((emp: any) => {
+      if (adminUnitIds.has(emp.unit_id)) return false
+      const unitObj = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
+      if (unitObj?.code?.toUpperCase() === 'ADMIN' || unitObj?.name?.toUpperCase() === 'SUPERADMIN') return false
+      return true
+    })
+
+    if (!directErr && directEmps.length > 0) {
+      const unitSchemaMap = new Map((unitsData || []).map((u: any) => [u.id, u.kpi_schema_mode]))
 
       // Filter categories according to the schema logic matching the assessment form
       const validCategories = (categoriesData || []).filter(c => {
@@ -166,33 +182,42 @@ export async function GET(request: NextRequest) {
       let priorityIndicatorIds = new Set<string>()
       let allIndicatorCountMap: Record<string, number> = {}
 
-      if (validCategoryIds.length > 0) {
-        const { data: validIndicators } = await adminClient
-          .from('m_kpi_indicators')
-          .select('id, category_id, calculation_method')
-          .eq('is_active', true)
-          .in('category_id', validCategoryIds)
+      // Scope assessment query to unit employees when filtered (avoids scanning entire hospital)
+      const directEmpIds = directEmps.map((e: any) => e.id)
+      const scopeByEmpIds = Boolean(effectiveUnitFilter && directEmpIds.length > 0 && directEmpIds.length <= 200)
 
-        validIndicators?.forEach((ind: any) => {
-          const uId = catToUnitMap.get(ind.category_id) as string
-          if (uId) {
-            allIndicatorCountMap[uId] = (allIndicatorCountMap[uId] || 0) + 1
-            if (ind.calculation_method === 'priority') {
-              priorityIndicatorIds.add(ind.id)
-            } else {
-              requiredIndicatorCountMap[uId] = (requiredIndicatorCountMap[uId] || 0) + 1
-            }
+      // Run indicators query and existing assessments query in parallel
+      const [validIndicatorsRes, existingAssessments] = await Promise.all([
+        validCategoryIds.length > 0
+          ? adminClient
+              .from('m_kpi_indicators')
+              .select('id, category_id, calculation_method')
+              .eq('is_active', true)
+              .in('category_id', validCategoryIds)
+          : Promise.resolve({ data: [] as any[] }),
+        fetchAllRows(
+          adminClient,
+          't_kpi_assessments',
+          'employee_id, indicator_id',
+          (q: any) => {
+            let qry = q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+            if (scopeByEmpIds) qry = qry.in('employee_id', directEmpIds)
+            return qry
           }
-        })
-      }
+        ),
+      ])
 
-      // Get existing assessments for this period and revenue_type (paginated to handle >1000 rows)
-      const existingAssessments = await fetchAllRows(
-        adminClient,
-        't_kpi_assessments',
-        'employee_id, indicator_id',
-        (q: any) => q.eq('period', period).or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
-      )
+      validIndicatorsRes.data?.forEach((ind: any) => {
+        const uId = catToUnitMap.get(ind.category_id) as string
+        if (uId) {
+          allIndicatorCountMap[uId] = (allIndicatorCountMap[uId] || 0) + 1
+          if (ind.calculation_method === 'priority') {
+            priorityIndicatorIds.add(ind.id)
+          } else {
+            requiredIndicatorCountMap[uId] = (requiredIndicatorCountMap[uId] || 0) + 1
+          }
+        }
+      })
 
       const assessedCountMap: Record<string, Set<string>> = {}
       existingAssessments?.forEach((ass: any) => {
@@ -284,17 +309,9 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Secondary filter: Exclude superadmins AND employees from SUPERADMIN unit
-    const { data: adminUnitInfo } = await adminClient
-      .from('m_units')
-      .select('id, name')
-      .or('code.ilike.ADMIN,name.ilike.SUPERADMIN')
-      .maybeSingle()
-
     const filteredResults = employeesData.filter((emp: any) => {
       if (emp.role === 'superadmin') return false
-      // Exclude SUPERADMIN unit by id or name
-      if (adminUnitInfo && emp.unit_id === adminUnitInfo.id) return false
+      if (adminUnitIds.has(emp.unit_id)) return false
       if (emp.unit_name?.toUpperCase() === 'SUPERADMIN') return false
       if (userRole === 'unit_manager' && emp.unit_id !== userUnitId) {
         return false
@@ -302,7 +319,19 @@ export async function GET(request: NextRequest) {
       return true
     })
 
-    return NextResponse.json({ employees: filteredResults })
+    const completedCount = filteredResults.filter(s => s.status === 'Selesai').length
+    const summary = {
+      total_employees: filteredResults.length,
+      completed: completedCount,
+      started: filteredResults.filter(s => s.assessed_indicators > 0).length,
+      partial: filteredResults.filter(s => s.status === 'Sebagian').length,
+      not_started: filteredResults.filter(s => s.assessed_indicators === 0).length,
+      completion_rate: filteredResults.length > 0
+        ? Math.round((completedCount / filteredResults.length) * 100)
+        : 0,
+    }
+
+    return NextResponse.json({ employees: filteredResults, summary })
   } catch (error) {
     console.error('Assessment employees GET error:', error)
     return NextResponse.json(

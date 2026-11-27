@@ -55,7 +55,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import * as XLSX from 'xlsx'
 import {
   BarChart,
   Bar,
@@ -274,8 +273,9 @@ export default function PegawaiPage() {
     }
   }
 
-  const handleDownloadErrorReport = () => {
+  const handleDownloadErrorReport = async () => {
     if (!importResult || !importResult.failedRows.length) return
+    const XLSX = await import('xlsx')
     const dataToExport = importResult.failedRows.map(row => ({
       'Baris': row.rowNumber,
       'Kode': row.code,

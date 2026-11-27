@@ -8,11 +8,16 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Plus, Search, Filter, RefreshCw, BarChart3, AlertCircle, Copy, Loader2, ShieldCheck, Lock, RotateCcw, CheckCheck, CalendarClock } from 'lucide-react'
+import dynamic from 'next/dynamic'
 import { toast } from 'sonner'
 import AssessmentTable from './AssessmentTable'
-import AssessmentReports from './AssessmentReports'
-import AddAssessmentPeriodDialog from './AddAssessmentPeriodDialog'
 import type { AssessmentStatus } from '@/lib/types/assessment.types'
+
+const AssessmentReports = dynamic(() => import('./AssessmentReports'), {
+  ssr: false,
+  loading: () => <div className="h-64 w-full bg-slate-100 animate-pulse rounded-xl" />
+})
+const AddAssessmentPeriodDialog = dynamic(() => import('./AddAssessmentPeriodDialog'), { ssr: false })
 
 interface AssessmentPageContentProps {
   currentEmployee: {
@@ -56,20 +61,23 @@ export default function AssessmentPageContent({
   })
   const [copyingUnit, setCopyingUnit] = useState(false)
 
-  // Load periods and units sequentially to avoid rate limits
+  // Load periods (only if not already passed from Server Component) and units in parallel
   const loadInitialData = async () => {
     try {
-      // Load periods first
-      const periodsRes = await fetch('/api/assessment/reports?action=periods')
-      if (periodsRes.ok) {
+      const [periodsRes, unitsRes] = await Promise.all([
+        (!availablePeriodsProp || availablePeriodsProp.length === 0)
+          ? fetch('/api/assessment/reports?action=periods')
+          : Promise.resolve(null),
+        fetch('/api/assessment/reports?action=units'),
+      ])
+
+      if (periodsRes && periodsRes.ok) {
         const periodsData = await periodsRes.json()
         if (periodsData.success && periodsData.periods) {
           setAvailablePeriods(periodsData.periods)
         }
       }
 
-      // Then load units (sequential to avoid auth rate limit)
-      const unitsRes = await fetch('/api/assessment/reports?action=units')
       if (unitsRes.ok) {
         const unitsData = await unitsRes.json()
         if (unitsData.success && unitsData.units) {
@@ -81,7 +89,7 @@ export default function AssessmentPageContent({
     }
   }
 
-  // Load employees for assessment
+  // Load employees AND summary in a single API call (/api/assessment/employees)
   const loadEmployees = async (retryCount = 0) => {
     if (!selectedPeriod) return
 
@@ -93,13 +101,25 @@ export default function AssessmentPageContent({
       const response = await fetch(`/api/assessment/employees?period=${selectedPeriod}${unitParam}&revenue_type=${activeRevenueType}`)
       if (response.ok) {
         const data = await response.json()
-        setEmployees(data.employees || [])
+        const emps: AssessmentStatus[] = data.employees || []
+        setEmployees(emps)
+        if (data.summary) {
+          setSummary(data.summary)
+        } else {
+          const completed = emps.filter(s => s.status === 'Selesai').length
+          setSummary({
+            total_employees: emps.length,
+            completed,
+            started: emps.filter(s => s.assessed_indicators > 0).length,
+            partial: emps.filter(s => s.status === 'Sebagian').length,
+            not_started: emps.filter(s => s.assessed_indicators === 0).length,
+            completion_rate: emps.length > 0 ? Math.round((completed / emps.length) * 100) : 0,
+          })
+        }
       } else {
         const errorData = await response.json().catch(() => ({ error: 'Gagal memuat data' }))
 
-        // Handle temporary 401 race condition with a silent retry
         if (response.status === 401 && retryCount < 2) {
-          console.warn(`[loadEmployees] 401 received, retrying (${retryCount + 1}/2)...`)
           await new Promise(res => setTimeout(res, 500))
           return loadEmployees(retryCount + 1)
         }
@@ -120,31 +140,8 @@ export default function AssessmentPageContent({
     }
   }
 
-  // Load assessment status summary
-  const loadSummary = async (retryCount = 0) => {
-    if (!selectedPeriod) return
-
-    try {
-      const unitParam = unitFilter !== 'all' ? `&unit_id=${unitFilter}` : ''
-      const response = await fetch(`/api/assessment/status?period=${selectedPeriod}${unitParam}&revenue_type=${activeRevenueType}`)
-      if (response.ok) {
-        const data = await response.json()
-        setSummary(data.summary || {
-          total_employees: 0,
-          completed: 0,
-          started: 0,
-          partial: 0,
-          not_started: 0,
-          completion_rate: 0
-        })
-      } else if (response.status === 401 && retryCount < 3) {
-        await new Promise(res => setTimeout(res, 600))
-        return loadSummary(retryCount + 1)
-      }
-    } catch (error) {
-      console.error('Error loading summary:', error)
-    }
-  }
+  // No-op alias kept so existing callers remain clean (summary is now updated directly in loadEmployees)
+  const loadSummary = async () => {}
 
   // Debounce search term
   useEffect(() => {
@@ -209,16 +206,13 @@ export default function AssessmentPageContent({
     }
   }
 
-  // Load data when period or unit filter changes - stagger calls to avoid auth rate limit
+  // Load employees + approval status in parallel when period, unit, or revenue type changes
   useEffect(() => {
     if (selectedPeriod && selectedPeriod !== 'null' && selectedPeriod !== 'undefined') {
-      const loadData = async () => {
-        await loadEmployees()
-        // Small delay to avoid concurrent auth.getUser() calls hitting rate limit
-        await loadSummary()
-        await loadApprovalStatus(selectedPeriod, activeRevenueType)
-      }
-      loadData()
+      Promise.all([
+        loadEmployees(),
+        loadApprovalStatus(selectedPeriod, activeRevenueType),
+      ])
     } else {
       setLoading(false)
       setEmployees([])

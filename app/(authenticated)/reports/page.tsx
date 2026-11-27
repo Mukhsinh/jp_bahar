@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -111,9 +111,21 @@ function ReportTypeCard({
 }
 
 function IncentiveTable({ data }: { data: any[] }) {
+  const [page, setPage] = useState(1)
+  const pageSize = 50
+
+  useEffect(() => {
+    setPage(1)
+  }, [data])
+
   if (!Array.isArray(data)) {
     return <div>Data must be an array, but received: {typeof data}</div>;
   }
+
+  const totalPages = Math.max(1, Math.ceil(data.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pageRows = data.slice((safePage - 1) * pageSize, safePage * pageSize)
+
   const headers = [
     'NIP/NIK', 'NAMA PEGAWAI', 'UNIT', 'PROPORSI UNIT',
     'P1', 'P2', 'P3', 'TOTAL INDEKS',
@@ -125,17 +137,18 @@ function IncentiveTable({ data }: { data: any[] }) {
   ]
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm min-w-[1100px]">
-        <thead>
-          <tr className="bg-gray-100">
-            {headers.map(h => (
-              <th key={h} className={`border p-2 ${rightAligned.includes(h) ? 'text-right' : 'text-left'} font-semibold text-[10px] whitespace-nowrap`}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row: any, idx: number) => (
+    <div className="space-y-4">
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm min-w-[1100px]">
+          <thead>
+            <tr className="bg-gray-100">
+              {headers.map(h => (
+                <th key={h} className={`border p-2 ${rightAligned.includes(h) ? 'text-right' : 'text-left'} font-semibold text-[10px] whitespace-nowrap`}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.map((row: any, idx: number) => (
             <tr key={idx} className="hover:bg-gray-50 text-xs text-left">
               <td className="border p-2 whitespace-nowrap">{safeRender(row.employee_code || '-')}</td>
               <td className="border p-2 font-medium min-w-[150px]">{safeRender(row.employee_name)}</td>
@@ -173,8 +186,25 @@ function IncentiveTable({ data }: { data: any[] }) {
               </td>
             </tr>
           ))}
-        </tbody>
-      </table>
+          </tbody>
+        </table>
+      </div>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-2 text-xs text-gray-600">
+          <span>
+            Menampilkan {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, data.length)} dari {data.length} baris (unduhan Excel/PDF tetap memuat seluruh {data.length} baris)
+          </span>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage === 1}>
+              Sebelumnya
+            </Button>
+            <span className="font-semibold px-2 py-1 bg-gray-100 rounded">{safePage} / {totalPages}</span>
+            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}>
+              Selanjutnya
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -457,10 +487,13 @@ export default function ReportsPage() {
     }
   }
 
-  const filteredEmployees = availableEmployees.filter(e =>
-    (selectedUnit === 'all' || e.unit_id === selectedUnit) &&
-    (searchTerm === '' || e.full_name.toLowerCase().includes(searchTerm.toLowerCase()))
-  )
+  const filteredEmployees = useMemo(() => {
+    const lowerSearch = searchTerm.trim().toLowerCase()
+    return availableEmployees.filter(e =>
+      (selectedUnit === 'all' || e.unit_id === selectedUnit) &&
+      (lowerSearch === '' || e.full_name?.toLowerCase().includes(lowerSearch))
+    )
+  }, [availableEmployees, selectedUnit, searchTerm])
 
   if (!isMounted) return <div className="p-6 text-sm text-gray-500">Memuat...</div>
 

@@ -58,19 +58,6 @@ const employeeCache = new LRUCache<{
   is_active: boolean
 }>(MAX_CACHE_SIZE, CACHE_TTL)
 
-// Background cleanup (runs less frequently)
-let lastCleanup = 0
-const CLEANUP_INTERVAL = 10 * 60 * 1000 // 10 minutes
-
-function shouldCleanup(): boolean {
-  const now = Date.now()
-  if (now - lastCleanup > CLEANUP_INTERVAL) {
-    lastCleanup = now
-    return true
-  }
-  return false
-}
-
 const isDev = process.env.NODE_ENV !== 'production'
 
 /**
@@ -113,11 +100,6 @@ export async function middleware(request: NextRequest) {
 
     if (isDev) {
       console.log('[MIDDLEWARE] Path:', pathname, '| Cookies present:', request.cookies.getAll().map(c => c.name))
-    }
-
-    // Background cleanup (only occasionally)
-    if (shouldCleanup()) {
-      employeeCache.clear()
     }
 
     // 1. Create supabase client with modern getAll / setAll
@@ -362,8 +344,6 @@ export const config = {
     '/profile/:path*',
     '/notifications',
     '/notifications/:path*',
-    // API routes
-    '/api/:path*',
     // Legacy routes for redirect
     '/admin/:path*',
     '/manager/:path*',

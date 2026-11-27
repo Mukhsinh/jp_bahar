@@ -99,37 +99,42 @@ export async function DashboardContent({
 
     if (superAdmin || unitManager) {
       try {
-        if (superAdmin) {
-          const { data: unitsData } = await supabase.from('m_units').select('id, name').order('name')
-          units = unitsData || []
-        }
-
-        // Parallel data loading for dashboard
+        // Run all dashboard queries in a single parallel batch
         const [
+          unitsResult,
           dashboardStats,
           topPerformersData,
           worstPerformersData,
           performanceTrendData,
           kpiDistributionData,
+          unitPerformanceResult,
         ] = await Promise.allSettled([
+          superAdmin
+            ? supabase.from('m_units').select('id, name').order('name')
+            : Promise.resolve({ data: [] }),
           DashboardService.getDashboardStats(effectiveUnitId, period, year),
           DashboardService.getTopPerformers(5, effectiveUnitId, period, year),
           DashboardService.getWorstPerformers(5, effectiveUnitId, period, year),
           DashboardService.getPerformanceTrend(6, effectiveUnitId, period, year),
-          DashboardService.getKPIDistribution(effectiveUnitId, period, year)
+          DashboardService.getKPIDistribution(effectiveUnitId, period, year),
+          employee.role === 'superadmin'
+            ? DashboardService.getUnitPerformance(period, year)
+            : Promise.resolve([]),
         ])
 
-        // Process results with fallbacks
-        stats = dashboardStats.status === 'fulfilled' ? dashboardStats.value : await DashboardService.getDashboardStats(effectiveUnitId, period, year)
+        units = unitsResult.status === 'fulfilled' ? ((unitsResult.value as any)?.data || []) : []
+        stats = dashboardStats.status === 'fulfilled' ? dashboardStats.value : {
+          totalEmployees: 0,
+          totalUnits: 0,
+          avgScore: 0,
+          completionRate: 0,
+          trends: { employees: 0, score: 0, completion: 0 }
+        }
         topPerformers = topPerformersData.status === 'fulfilled' ? topPerformersData.value : []
         worstPerformers = worstPerformersData.status === 'fulfilled' ? worstPerformersData.value : []
         performanceTrend = performanceTrendData.status === 'fulfilled' ? performanceTrendData.value : []
         kpiDistribution = kpiDistributionData.status === 'fulfilled' ? kpiDistributionData.value : []
-
-        if (employee.role === 'superadmin') {
-          const unitPerformanceRes = await DashboardService.getUnitPerformance(period, year)
-          unitPerformance = unitPerformanceRes
-        }
+        unitPerformance = unitPerformanceResult.status === 'fulfilled' ? unitPerformanceResult.value : []
       } catch (serviceError) {
         console.error('Dashboard service error:', serviceError)
         stats = {

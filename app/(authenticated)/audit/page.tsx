@@ -28,6 +28,9 @@ interface AuditLog {
 
 export default function AuditPage() {
   const [logs, setLogs] = useState<AuditLog[]>([])
+  const [totalCount, setTotalCount] = useState(0)
+  const [currentPage, setCurrentPage] = useState(1)
+  const pageSize = 50
   const [loading, setLoading] = useState(true)
   const [filters, setFilters] = useState({
     startDate: '',
@@ -36,31 +39,43 @@ export default function AuditPage() {
     table: '',
     operation: '',
   })
-  
-  const loadLogs = async () => {
+  const [debouncedFilters, setDebouncedFilters] = useState(filters)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedFilters(filters)
+      setCurrentPage(1)
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [filters])
+
+  const loadLogs = async (page = currentPage, activeFilters = debouncedFilters) => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
-      if (filters.startDate) params.append('startDate', filters.startDate)
-      if (filters.endDate) params.append('endDate', filters.endDate)
-      if (filters.user) params.append('user', filters.user)
-      if (filters.table) params.append('table', filters.table)
-      if (filters.operation) params.append('operation', filters.operation)
-      
+      params.append('page', String(page))
+      params.append('pageSize', String(pageSize))
+      if (activeFilters.startDate) params.append('startDate', activeFilters.startDate)
+      if (activeFilters.endDate) params.append('endDate', activeFilters.endDate)
+      if (activeFilters.user) params.append('user', activeFilters.user)
+      if (activeFilters.table) params.append('table', activeFilters.table)
+      if (activeFilters.operation) params.append('operation', activeFilters.operation)
+
       const response = await fetch(`/api/audit?${params.toString()}`)
       if (response.ok) {
         const result = await response.json()
         setLogs(result.data || [])
+        setTotalCount(result.count ?? (result.data?.length || 0))
       }
     } catch (error) {
       console.error('Failed to load audit logs:', error)
     }
     setLoading(false)
   }
-  
+
   useEffect(() => {
-    loadLogs()
-  }, [filters])
+    loadLogs(currentPage, debouncedFilters)
+  }, [debouncedFilters, currentPage])
   
   const handleExport = async () => {
     try {
@@ -217,7 +232,7 @@ export default function AuditPage() {
         <Card>
           <CardHeader>
             <CardTitle>Audit Logs</CardTitle>
-            <CardDescription>Total: {logs.length} records</CardDescription>
+            <CardDescription>Total: {totalCount} records</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
@@ -271,6 +286,31 @@ export default function AuditPage() {
                 </TableBody>
               </Table>
             </div>
+            {Math.ceil(totalCount / pageSize) > 1 && (
+              <div className="flex items-center justify-between pt-4">
+                <span className="text-xs text-gray-500">
+                  Halaman {currentPage} dari {Math.ceil(totalCount / pageSize)}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1 || loading}
+                  >
+                    Sebelumnya
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalCount / pageSize), p + 1))}
+                    disabled={currentPage >= Math.ceil(totalCount / pageSize) || loading}
+                  >
+                    Selanjutnya
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

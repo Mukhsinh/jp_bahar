@@ -73,40 +73,50 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Get auth user data for each employee using service role
-    const users = []
+    // Get auth user data in bounded parallel batches instead of 50 sequential N+1 HTTP calls
+    const users: any[] = []
+    const empList = employees || []
+    const BATCH_SIZE = 10
 
-    for (const emp of employees || []) {
-      try {
-        // Get user from auth.users
-        const { data: { user: authUser }, error: userError } = await adminClient.auth.admin.getUserById(emp.user_id)
-
-        if (!userError && authUser) {
-          users.push({
-            id: authUser.id,
-            email: authUser.email || '',
-            role: authUser.user_metadata?.role || 'employee',
-            employee_id: emp.id,
-            is_active: emp.is_active,
-            created_at: authUser.created_at,
-            updated_at: authUser.updated_at || authUser.created_at,
-            pegawai: {
-              id: emp.id,
-              employee_code: emp.employee_code,
-              full_name: emp.full_name,
-              unit_id: emp.unit_id,
-              tax_status: emp.tax_status,
-              is_active: emp.is_active,
-              created_at: emp.created_at,
-              updated_at: emp.updated_at,
-              m_units: Array.isArray(emp.m_units) && emp.m_units.length > 0
-                ? emp.m_units[0]
-                : undefined
+    for (let i = 0; i < empList.length; i += BATCH_SIZE) {
+      const batch = empList.slice(i, i + BATCH_SIZE)
+      const batchResults = await Promise.all(
+        batch.map(async (emp) => {
+          if (!emp.user_id) return null
+          try {
+            const { data: { user: authUser }, error: userError } = await adminClient.auth.admin.getUserById(emp.user_id)
+            if (!userError && authUser) {
+              return {
+                id: authUser.id,
+                email: authUser.email || '',
+                role: authUser.user_metadata?.role || 'employee',
+                employee_id: emp.id,
+                is_active: emp.is_active,
+                created_at: authUser.created_at,
+                updated_at: authUser.updated_at || authUser.created_at,
+                pegawai: {
+                  id: emp.id,
+                  employee_code: emp.employee_code,
+                  full_name: emp.full_name,
+                  unit_id: emp.unit_id,
+                  tax_status: emp.tax_status,
+                  is_active: emp.is_active,
+                  created_at: emp.created_at,
+                  updated_at: emp.updated_at,
+                  m_units: Array.isArray(emp.m_units) && emp.m_units.length > 0
+                    ? emp.m_units[0]
+                    : undefined
+                }
+              }
             }
-          })
-        }
-      } catch (err) {
-        console.error('Error fetching user:', emp.user_id, err)
+          } catch (err) {
+            console.error('Error fetching user:', emp.user_id, err)
+          }
+          return null
+        })
+      )
+      for (const item of batchResults) {
+        if (item) users.push(item)
       }
     }
 

@@ -15,15 +15,15 @@ import type {
 } from '@/lib/types/kpi.types'
 import { isMedicalUnit as checkMedicalUnit } from '@/lib/utils/medical-unit'
 
-// Direct imports instead of dynamic to fix chunk loading issues
+import dynamic from 'next/dynamic'
 import KPITree from '@/components/kpi/KPITree'
-import CategoryFormDialog from '@/components/kpi/CategoryFormDialog'
-import IndicatorFormDialog from '@/components/kpi/IndicatorFormDialog'
-import SubIndicatorFormDialog from '@/components/kpi/SubIndicatorFormDialog'
-import CopyStructureDialog from '@/components/kpi/CopyStructureDialog'
-import CopyBPJSStructureDialog from '@/components/kpi/CopyBPJSStructureDialog'
 import { getUnitsForKPI, getKPIStructure, updateUnitKPISchemaMode } from './actions'
-import ExcelImportDialog from '@/components/kpi/ExcelImportDialog'
+
+const CategoryFormDialog = dynamic(() => import('@/components/kpi/CategoryFormDialog'), { ssr: false })
+const IndicatorFormDialog = dynamic(() => import('@/components/kpi/IndicatorFormDialog'), { ssr: false })
+const SubIndicatorFormDialog = dynamic(() => import('@/components/kpi/SubIndicatorFormDialog'), { ssr: false })
+const CopyStructureDialog = dynamic(() => import('@/components/kpi/CopyStructureDialog'), { ssr: false })
+const CopyBPJSStructureDialog = dynamic(() => import('@/components/kpi/CopyBPJSStructureDialog'), { ssr: false })
 import {
   DropdownMenu,
   DropdownMenuContent,

@@ -102,6 +102,219 @@ function getMenuItems(role: string): MenuItem[] {
   return [] // Employees have no access as per requirement
 }
 
+const SkeletonContent = React.memo(function SkeletonContent() {
+  return (
+    <div className="flex flex-col h-full bg-white border-r border-gray-100">
+      <div className="p-5 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 40%, #3b82f6 100%)' }}>
+        <div className="h-8 bg-white/20 rounded-2xl animate-pulse" />
+      </div>
+      <div className="p-4 space-y-2 flex-1">
+        {[...Array(6)].map((_, i) => (
+          <div key={i} className="h-10 bg-gray-50 rounded-xl animate-pulse" />
+        ))}
+      </div>
+    </div>
+  )
+})
+
+const SidebarInner = React.memo(function SidebarInner({
+  isCollapsed,
+  setIsCollapsed,
+  setIsMobileOpen,
+  companyInfo,
+  user,
+  unitName,
+  unreadCount,
+  showLogoutDialog,
+  setShowLogoutDialog,
+  handleLogout,
+  isActive,
+  menuItems
+}: SidebarInnerProps) {
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-white border-r border-slate-200/80 shadow-lg">
+      {/* Header */}
+      <div className="relative overflow-hidden flex-shrink-0 premium-gradient">
+        {/* Decorative elements */}
+        <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-white/10 blur-3xl animate-pulse" />
+        <div className="absolute -bottom-8 -left-8 w-32 h-32 rounded-full bg-indigo-500/20 blur-2xl" />
+        <div className="absolute inset-0 bg-white/5 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px' }} />
+
+        <div className="relative p-6 border-b border-white/10">
+          <div className="flex items-center justify-between">
+            {!isCollapsed && (
+              <div className="flex items-center gap-4 min-w-0 animate-in">
+                <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl flex-shrink-0 overflow-hidden hover-scale border border-white/20">
+                  {companyInfo?.logo ? (
+                    <img
+                      src={companyInfo.logo}
+                      alt={companyInfo?.appName || 'Logo'}
+                      className="w-full h-full object-contain p-1"
+                    />
+                  ) : (
+                    <span className="text-[#f97316] font-bold text-2xl">
+                      {(companyInfo?.appName || 'P').charAt(0)}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h1
+                    className="leading-tight uppercase font-black tracking-tight text-[#f97316] break-words"
+                    style={{ fontSize: '19px' }}
+                  >
+                    {companyInfo?.appName || 'PINTAR JP'}
+                  </h1>
+                  <p className="text-[10px] font-medium text-blue-100 uppercase tracking-wide opacity-90 mt-0.5 leading-tight line-clamp-2">
+                    {companyInfo?.name || 'Management System'}
+                  </p>
+                </div>
+              </div>
+            )}
+            {isCollapsed && (
+              <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-xl mx-auto hover-scale border border-white/20 animate-in">
+                {companyInfo?.logo ? (
+                  <img
+                    src={companyInfo.logo}
+                    alt={companyInfo?.appName || 'Logo'}
+                    className="w-full h-full object-contain p-2"
+                  />
+                ) : (
+                  <span className="text-[#f97316] font-bold text-xl">
+                    {(companyInfo?.appName || 'P').charAt(0)}
+                  </span>
+                )}
+              </div>
+            )}
+            <button
+              onClick={() => setIsCollapsed(c => !c)}
+              className="p-2 hover:bg-white/20 rounded-xl transition-all text-white/80 hover:text-white flex-shrink-0 hidden lg:flex hover-scale border border-transparent hover:border-white/10"
+              aria-label={isCollapsed ? 'Expand' : 'Collapse'}
+            >
+              {isCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+            </button>
+            <button
+              onClick={() => setIsMobileOpen(false)}
+              className="p-2 hover:bg-white/20 rounded-xl transition-all text-white/80 hover:text-white flex-shrink-0 lg:hidden hover-scale"
+              aria-label="Close"
+            >
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-1.5 scrollbar-hide">
+        {menuItems.map(item => {
+          if (!item) return null
+          const Icon = iconMap[item.icon] || User
+          const active = isActive(item.path)
+          const isNotif = item.id === 'notifications'
+
+          return (
+            <OptimizedLink
+              key={item.id}
+              href={item.path}
+              prefetch={false}
+              onClick={() => setIsMobileOpen(false)}
+              className={cn(
+                'w-full flex items-center gap-4 px-4 py-2 rounded-xl transition-all duration-300 group hover-scale',
+                active
+                  ? 'premium-gradient text-white shadow-lg shadow-blue-600/30 ring-1 ring-white/20'
+                  : 'text-slate-600 hover:bg-blue-50/50 hover:text-blue-700'
+              )}
+            >
+              <div className="relative flex-shrink-0">
+                <Icon size={20} className={cn('transition-all duration-300', active ? 'text-white scale-110' : 'text-slate-400 group-hover:text-blue-600 group-hover:scale-110')} />
+                {isNotif && unreadCount > 0 && (
+                  <span className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-bounce">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </div>
+              {!isCollapsed && (
+                <span className={cn('text-[14px] font-medium tracking-normal truncate', active ? 'text-white' : 'text-slate-600')}>
+                  {item.label}
+                </span>
+              )}
+              {active && !isCollapsed && (
+                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white shadow-sm" />
+              )}
+            </OptimizedLink>
+          )
+        })}
+      </nav>
+
+      {/* Bottom: User Info + Logout */}
+      <div className="p-4 bg-slate-50/50 border-t border-slate-100 flex-shrink-0">
+        {user && (
+          <>
+            {showLogoutDialog && (
+              <div className="mb-3 p-4 glass bg-white/90 rounded-2xl border border-red-100 shadow-xl animate-in">
+                <p className="text-[13px] text-slate-800 font-bold mb-4 text-center">Keluar dari sistem?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowLogoutDialog(false)}
+                    className="flex-1 h-10 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-all active:scale-95"
+                  >
+                    BATAL
+                  </button>
+                  <button
+                    onClick={handleLogout}
+                    className="flex-1 h-10 text-xs font-semibold rounded-xl bg-red-500 hover:bg-red-600 text-white shadow-md shadow-red-200 transition-all active:scale-95"
+                  >
+                    YA, KELUAR
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className={cn(
+              'rounded-2xl bg-white border border-slate-100 shadow-sm transition-all duration-300',
+              isCollapsed ? 'p-2 flex flex-col items-center gap-3' : 'p-3 flex items-center gap-4 hover:shadow-md'
+            )}>
+              <div className="relative group flex-shrink-0">
+                <div className="w-11 h-11 premium-gradient rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg group-hover:scale-105 transition-transform">
+                  {(user.full_name || user.email || 'U').charAt(0).toUpperCase()}
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full shadow-sm" />
+              </div>
+
+              {!isCollapsed && (
+                <div className="min-w-0 flex-1 animate-in">
+                  <div className="font-semibold text-[13px] text-slate-800 truncate">
+                    {user.full_name || user.email}
+                  </div>
+                  {unitName && <div className="text-[10px] text-slate-400 truncate mt-0.5">{unitName}</div>}
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <span className={cn(
+                      'text-[10px] px-2 py-0.5 rounded-md font-medium',
+                      user.role === 'superadmin' ? 'bg-purple-100 text-purple-700' :
+                        user.role === 'unit_manager' ? 'bg-blue-100 text-blue-700' :
+                          'bg-slate-100 text-slate-600'
+                    )}>
+                      {user.role === 'superadmin' ? 'Superadmin' :
+                        user.role === 'unit_manager' ? 'Manajer Unit' : 'Pegawai'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => setShowLogoutDialog(true)}
+                title="Keluar"
+                className="p-2.5 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all hover-scale"
+              >
+                <LogOut size={18} />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+})
+
 // ── Auth Hook ────────────────────────────────────────────────────────────────
 
 function useAuth() {
@@ -242,223 +455,6 @@ export default function Sidebar() {
   )
 
   const menuItems = user ? getMenuItems(user.role) : []
-
-  // ── Skeleton (shown while loading or not mounted) ──────────────────────────
-  const SkeletonContent = () => (
-    <div className="flex flex-col h-full bg-white border-r border-gray-100">
-      <div className="p-5 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 40%, #3b82f6 100%)' }}>
-        <div className="h-8 bg-white/20 rounded-2xl animate-pulse" />
-      </div>
-      <div className="p-4 space-y-2 flex-1">
-        {[...Array(6)].map((_, i) => (
-          <div key={i} className="h-10 bg-gray-50 rounded-xl animate-pulse" />
-        ))}
-      </div>
-    </div>
-  )
-
-  // ── Sidebar Inner Component ───────────────────────────────────────────────
-  const SidebarInner = ({
-    isCollapsed,
-    setIsCollapsed,
-    isMobileOpen,
-    setIsMobileOpen,
-    companyInfo,
-    user,
-    unitName,
-    unreadCount,
-    showLogoutDialog,
-    setShowLogoutDialog,
-    handleLogout,
-    isActive,
-    menuItems
-  }: SidebarInnerProps) => (
-    <div className="flex flex-col h-full overflow-hidden bg-white border-r border-slate-200/80 shadow-lg">
-      {/* Header */}
-      <div className="relative overflow-hidden flex-shrink-0 premium-gradient">
-        {/* Decorative elements */}
-        <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-white/10 blur-3xl animate-pulse" />
-        <div className="absolute -bottom-8 -left-8 w-32 h-32 rounded-full bg-indigo-500/20 blur-2xl" />
-        <div className="absolute inset-0 bg-white/5 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px' }} />
-
-        <div className="relative p-6 border-b border-white/10">
-          <div className="flex items-center justify-between">
-            {!isCollapsed && (
-              <div className="flex items-center gap-4 min-w-0 animate-in">
-                <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl flex-shrink-0 overflow-hidden hover-scale border border-white/20">
-                  {companyInfo?.logo ? (
-                    <img
-                      key={companyInfo.logo}
-                      src={companyInfo.logo}
-                      alt={companyInfo?.appName || 'Logo'}
-                      className="w-full h-full object-contain p-1"
-                    />
-                  ) : (
-                    <span className="text-[#f97316] font-bold text-2xl">
-                      {(companyInfo?.appName || 'P').charAt(0)}
-                    </span>
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h1
-                    className="leading-tight uppercase font-black tracking-tight text-[#f97316] break-words"
-                    style={{ fontSize: '19px' }}
-                  >
-                    {companyInfo?.appName || 'PINTAR JP'}
-                  </h1>
-                  <p className="text-[10px] font-medium text-blue-100 uppercase tracking-wide opacity-90 mt-0.5 leading-tight line-clamp-2">
-                    {companyInfo?.name || 'Management System'}
-                  </p>
-                </div>
-              </div>
-            )}
-            {isCollapsed && (
-              <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-xl mx-auto hover-scale border border-white/20 animate-in">
-                {companyInfo?.logo ? (
-                  <img
-                    key={companyInfo.logo}
-                    src={companyInfo.logo}
-                    alt={companyInfo?.appName || 'Logo'}
-                    className="w-full h-full object-contain p-2"
-                  />
-                ) : (
-                  <span className="text-[#f97316] font-bold text-xl">
-                    {(companyInfo?.appName || 'P').charAt(0)}
-                  </span>
-                )}
-              </div>
-            )}
-            <button
-              onClick={() => setIsCollapsed(c => !c)}
-              className="p-2 hover:bg-white/20 rounded-xl transition-all text-white/80 hover:text-white flex-shrink-0 hidden lg:flex hover-scale border border-transparent hover:border-white/10"
-              aria-label={isCollapsed ? 'Expand' : 'Collapse'}
-            >
-              {isCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-            </button>
-            <button
-              onClick={() => setIsMobileOpen(false)}
-              className="p-2 hover:bg-white/20 rounded-xl transition-all text-white/80 hover:text-white flex-shrink-0 lg:hidden hover-scale"
-              aria-label="Close"
-            >
-              <X size={20} />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-1.5 scrollbar-hide">
-        {menuItems.map(item => {
-          if (!item) return null
-          const Icon = iconMap[item.icon] || User
-          const active = isActive(item.path)
-          const isNotif = item.id === 'notifications'
-
-          return (
-            <OptimizedLink
-              key={item.id}
-              href={item.path}
-              onClick={() => setIsMobileOpen(false)}
-              className={cn(
-                'w-full flex items-center gap-4 px-4 py-2 rounded-xl transition-all duration-300 group hover-scale',
-                active
-                  ? 'premium-gradient text-white shadow-lg shadow-blue-600/30 ring-1 ring-white/20'
-                  : 'text-slate-600 hover:bg-blue-50/50 hover:text-blue-700'
-              )}
-            >
-              <div className="relative flex-shrink-0">
-                <Icon size={20} className={cn('transition-all duration-300', active ? 'text-white scale-110' : 'text-slate-400 group-hover:text-blue-600 group-hover:scale-110')} />
-                {isNotif && unreadCount > 0 && (
-                  <span className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-bounce">
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
-                )}
-              </div>
-              {!isCollapsed && (
-                <span className={cn('text-[14px] font-medium tracking-normal truncate', active ? 'text-white' : 'text-slate-600')}>
-                  {item.label}
-                </span>
-              )}
-              {active && !isCollapsed && (
-                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white shadow-sm" />
-              )}
-            </OptimizedLink>
-          )
-        })}
-      </nav>
-
-      {/* Bottom: User Info + Logout */}
-      <div className="p-4 bg-slate-50/50 border-t border-slate-100 flex-shrink-0">
-        {user && (
-          <>
-            {/* Confirm dialog */}
-            {showLogoutDialog && (
-              <div className="mb-3 p-4 glass bg-white/90 rounded-2xl border border-red-100 shadow-xl animate-in">
-                <p className="text-[13px] text-slate-800 font-bold mb-4 text-center">Keluar dari sistem?</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowLogoutDialog(false)}
-                    className="flex-1 h-10 text-xs font-semibold rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-all active:scale-95"
-                  >
-                    BATAL
-                  </button>
-                  <button
-                    onClick={handleLogout}
-                    className="flex-1 h-10 text-xs font-semibold rounded-xl bg-red-500 hover:bg-red-600 text-white shadow-md shadow-red-200 transition-all active:scale-95"
-                  >
-                    YA, KELUAR
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* User Profile Card */}
-            <div className={cn(
-              'rounded-2xl bg-white border border-slate-100 shadow-sm transition-all duration-300',
-              isCollapsed ? 'p-2 flex flex-col items-center gap-3' : 'p-3 flex items-center gap-4 hover:shadow-md'
-            )}>
-              {/* Avatar */}
-              <div className="relative group flex-shrink-0">
-                <div className="w-11 h-11 premium-gradient rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg group-hover:scale-105 transition-transform">
-                  {(user.full_name || user.email || 'U').charAt(0).toUpperCase()}
-                </div>
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full shadow-sm" />
-              </div>
-
-              {!isCollapsed && (
-                <div className="min-w-0 flex-1 animate-in">
-                  <div className="font-semibold text-[13px] text-slate-800 truncate">
-                    {user.full_name || user.email}
-                  </div>
-                  {unitName && <div className="text-[10px] text-slate-400 truncate mt-0.5">{unitName}</div>}
-                  <div className="mt-1.5 flex items-center gap-1.5">
-                    <span className={cn(
-                      'text-[10px] px-2 py-0.5 rounded-md font-medium',
-                      user.role === 'superadmin' ? 'bg-purple-100 text-purple-700' :
-                        user.role === 'unit_manager' ? 'bg-blue-100 text-blue-700' :
-                          'bg-slate-100 text-slate-600'
-                    )}>
-                      {user.role === 'superadmin' ? 'Superadmin' :
-                        user.role === 'unit_manager' ? 'Manajer Unit' : 'Pegawai'}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* Logout button */}
-              <button
-                onClick={() => setShowLogoutDialog(true)}
-                title="Keluar"
-                className="p-2.5 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all hover-scale"
-              >
-                <LogOut size={18} />
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  )
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (

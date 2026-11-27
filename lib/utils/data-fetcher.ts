@@ -16,13 +16,9 @@ export interface QueryResult<T> {
 }
 
 export class DataFetcher {
-  private supabase: Awaited<ReturnType<typeof createClient>> | null = null
-
   private async getSupabase() {
-    if (!this.supabase) {
-      this.supabase = await createClient()
-    }
-    return this.supabase
+    // Always create a request-scoped client so cookies/JWT never leak across users
+    return await createClient()
   }
 
   /**
@@ -100,6 +96,8 @@ export class DataFetcher {
         )
       `)
       .eq('is_active', true)
+      .eq('t_kpi_assessments.period', period)
+      .eq('t_realization.period', period)
 
     if (unitId) {
       query = query.eq('unit_id', unitId)

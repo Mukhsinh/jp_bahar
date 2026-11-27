@@ -75,6 +75,10 @@ interface ReportExportOptions {
   isBreakdown?: boolean
 }
 
+// Cache fetched logo bytes in memory (5-min TTL) so multi-page / 300-slip PDF exports only download once
+const logoBytesCache = new Map<string, { bytes: Uint8Array; format: string; expires: number }>()
+const LOGO_CACHE_TTL_MS = 5 * 60 * 1000
+
 /**
  * Helper to add professional Kop Surat (Header) to PDF
  */
@@ -86,13 +90,20 @@ async function addKopSurat(doc: jsPDF, companyInfo: any) {
       if (companyInfo.logo.startsWith('data:image')) {
         doc.addImage(companyInfo.logo, 'PNG', 15, 8, 22, 22)
       } else if (companyInfo.logo.startsWith('http')) {
-        const imgRes = await fetch(companyInfo.logo);
-        const arrayBuffer = await imgRes.arrayBuffer();
-        let format = 'PNG';
-        if (companyInfo.logo.toLowerCase().includes('.jpg') || companyInfo.logo.toLowerCase().includes('.jpeg')) {
-          format = 'JPEG';
+        const now = Date.now()
+        let cached = logoBytesCache.get(companyInfo.logo)
+        if (!cached || cached.expires <= now) {
+          const imgRes = await fetch(companyInfo.logo)
+          const arrayBuffer = await imgRes.arrayBuffer()
+          const format =
+            companyInfo.logo.toLowerCase().includes('.jpg') ||
+            companyInfo.logo.toLowerCase().includes('.jpeg')
+              ? 'JPEG'
+              : 'PNG'
+          cached = { bytes: new Uint8Array(arrayBuffer), format, expires: now + LOGO_CACHE_TTL_MS }
+          logoBytesCache.set(companyInfo.logo, cached)
         }
-        doc.addImage(new Uint8Array(arrayBuffer) as any, format, 15, 8, 22, 22)
+        doc.addImage(cached.bytes as any, cached.format, 15, 8, 22, 22)
       }
     } catch (e) {
       console.error('Error adding logo to PDF:', e)

@@ -148,8 +148,11 @@ export default function AssessmentFormDialog({
   const loadData = async (revenueType: 'bpjs' | 'umum' = activeRevenueType) => {
     setLoading(true)
     try {
-      const currentCats = await loadKPIIndicators(revenueType)
-      await loadExistingAssessments(revenueType, currentCats)
+      const [currentCats, assessmentsRes] = await Promise.all([
+        loadKPIIndicators(revenueType),
+        fetch(`/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`),
+      ])
+      await loadExistingAssessments(revenueType, currentCats, assessmentsRes)
     } finally {
       setLoading(false)
     }
@@ -184,9 +187,13 @@ export default function AssessmentFormDialog({
     return Number(indicator.target_value || 0)
   }
 
-  const loadExistingAssessments = async (revenueType: 'bpjs' | 'umum' = activeRevenueType, currentCategories?: KPICategory[]) => {
+  const loadExistingAssessments = async (
+    revenueType: 'bpjs' | 'umum' = activeRevenueType,
+    currentCategories?: KPICategory[],
+    prefetchedResponse?: Response
+  ) => {
     try {
-      const response = await fetch(`/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`)
+      const response = prefetchedResponse || await fetch(`/api/assessment?employee_id=${employee.employee_id}&period=${period}&revenue_type=${revenueType}`)
       if (response.ok) {
         const data = await response.json()
         const assessmentMap: Record<string, AssessmentData> = {}

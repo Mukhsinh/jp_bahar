@@ -3,13 +3,12 @@ import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { getAuthenticatedUser } from '@/lib/supabase/auth-helper'
 import { isMedicalUnit } from '@/lib/utils/medical-unit'
 import { getTERCategory, getTERRate } from '@/lib/formulas/ter-lookup'
-import * as fs from 'fs'
 
 const OMIT_KEYS = ['created_at', 'updated_at', 'created_by', 'updated_by']
 
 /**
  * Batched .in() helper to avoid Supabase PostgREST URL length overflow.
- * Splits large arrays into chunks, queries each batch, and merges results.
+ * Splits large arrays into chunks of 150 and runs up to 4 chunks in parallel.
  */
 async function batchedIn(
   supabase: any,
@@ -18,44 +17,48 @@ async function batchedIn(
   filterColumn: string,
   filterValues: string[],
   additionalFilters?: (q: any) => any,
-  batchSize: number = 20
+  batchSize: number = 150
 ): Promise<any[]> {
   if (filterValues.length === 0) return []
 
-  const results: any[] = []
-  const pageSize = 1000
-
+  const batches: string[][] = []
   for (let i = 0; i < filterValues.length; i += batchSize) {
-    const batch = filterValues.slice(i, i + batchSize)
-    let page = 0
-    let hasMore = true
+    batches.push(filterValues.slice(i, i + batchSize))
+  }
 
-    while (hasMore) {
+  const pageSize = 1000
+  const fetchBatch = async (batch: string[], batchIndex: number): Promise<any[]> => {
+    const batchResults: any[] = []
+    let page = 0
+    while (true) {
       const from = page * pageSize
       const to = from + pageSize - 1
-
       let query = supabase.from(table).select(selectFields).in(filterColumn, batch).range(from, to)
       if (additionalFilters) query = additionalFilters(query)
 
       const { data, error } = await query
       if (error) {
-        console.error(`[batchedIn] Error fetching batch ${Math.floor(i / batchSize) + 1} page ${page} from ${table}:`, error)
+        console.error(`[batchedIn] Error fetching batch ${batchIndex + 1} page ${page} from ${table}:`, error)
         throw error
       }
-
       if (data && data.length > 0) {
-        results.push(...data)
-        if (data.length < pageSize) {
-          hasMore = false
-        } else {
-          page++
-        }
+        batchResults.push(...data)
+        if (data.length < pageSize) break
+        page++
       } else {
-        hasMore = false
+        break
       }
     }
+    return batchResults
   }
-  console.log(`[batchedIn] ${table}.${filterColumn}: ${filterValues.length} IDs -> ${results.length} total rows fetched`)
+
+  const results: any[] = []
+  const CONCURRENCY = 4
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    const group = batches.slice(i, i + CONCURRENCY)
+    const groupResults = await Promise.all(group.map((b, idx) => fetchBatch(b, i + idx)))
+    for (const r of groupResults) results.push(...r)
+  }
   return results
 }
 
@@ -838,15 +841,16 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
   let getActiveIndicatorSet: (unitId: string, schemaMode: string, targetRevenueType: string) => Set<string> = () => new Set()
 
   try {
-    const { data: activeCategories } = await supabase
-      .from('m_kpi_categories')
-      .select('id, unit_id, revenue_type, category, configuration_style')
-      .eq('is_active', true)
-
-    const { data: activeIndicators } = await supabase
-      .from('m_kpi_indicators')
-      .select('id, category_id, target_value, weight_percentage, calculation_method')
-      .eq('is_active', true)
+    const [{ data: activeCategories }, { data: activeIndicators }] = await Promise.all([
+      supabase
+        .from('m_kpi_categories')
+        .select('id, unit_id, revenue_type, category, configuration_style')
+        .eq('is_active', true),
+      supabase
+        .from('m_kpi_indicators')
+        .select('id, category_id, target_value, weight_percentage, calculation_method')
+        .eq('is_active', true),
+    ])
 
     const activeCategoryMap = new Map<string, any>(activeCategories?.map((c: any) => [c.id, c]) || [])
     indicatorDefMap = new Map<string, any>(activeIndicators?.map((i: any) => [
@@ -918,6 +922,29 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
   console.log(`[Report] Fetched ${allAssessments.length} main and ${subAssessments.length} sub-assessments`)
 
+  // Pre-index main & sub assessments into O(1) Maps/Sets (eliminates O(N^2) array scans; zero formula change)
+  const mainAssessByEmpIndMap = new Map<string, any>()
+  const empAssessmentsMap = new Map<string, any[]>()
+  for (const a of (allAssessments || [])) {
+    const k = `${a.employee_id}:${a.indicator_id}`
+    if (!mainAssessByEmpIndMap.has(k)) {
+      mainAssessByEmpIndMap.set(k, a)
+    }
+    let list = empAssessmentsMap.get(a.employee_id)
+    if (!list) {
+      list = []
+      empAssessmentsMap.set(a.employee_id, list)
+    }
+    list.push(a)
+  }
+
+  const subIndicatorHasRowsSet = new Set<string>()
+  const empHasSubSet = new Set<string>()
+  for (const s of (subAssessments || [])) {
+    if (s.indicator_id) subIndicatorHasRowsSet.add(s.indicator_id)
+    if (s.employee_id) empHasSubSet.add(s.employee_id)
+  }
+
   // Pre-compute medical status for sub-assessment workaround
   const empMedicalMap = new Map<string, boolean>()
   for (const emp of allEmployees) {
@@ -951,7 +978,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       const subRealization = Number(realVolStr) || 0
 
       const realScore = subRealization * tariff
-      const mainAsses = allAssessments?.find((a: any) => a.employee_id === sub.employee_id && a.indicator_id === sub.indicator_id)
+      const mainAsses = mainAssessByEmpIndMap.get(key)
       const isPri = mainAsses?.m_kpi_indicators?.calculation_method === 'priority'
 
       if (effectiveScore === 0 && Math.abs(realScore) > 0) {
@@ -961,7 +988,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       // Re-hydrate qualitative (scoring) metric manually
       const weight = Number(sub.m_kpi_sub_indicators?.weight_percentage || 0)
 
-      const mainAsses = allAssessments?.find((a: any) => a.employee_id === sub.employee_id && a.indicator_id === sub.indicator_id)
+      const mainAsses = mainAssessByEmpIndMap.get(key)
       const isPriority = mainAsses?.m_kpi_indicators?.calculation_method === 'priority'
       const catObj = mainAsses?.m_kpi_indicators?.m_kpi_categories || indicatorDefMap.get(sub.indicator_id)?.m_kpi_categories
       const isUnweighted = catObj?.is_weighted === false
@@ -1003,7 +1030,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
   // --- Helper: Calculate total score/activity for an employee ---
   const calcEmployeeTotalScore = (empId: string, isMedicalUnit: boolean) => {
-    let rawEmpAssessments = allAssessments?.filter((a: any) => a.employee_id === empId) || []
+    let rawEmpAssessments = empAssessmentsMap.get(empId) || []
 
     // Deduplicate main assessments to prevent score inflation from race-condition duplicate inserts
     const uniqueMap = new Map<string, any>()
@@ -1070,8 +1097,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
             // If indicator weight is 0 but sub-indicators exist for it, fallback to 100
             if (indWeight === 0) {
-              const subAggExists = subAssessments?.some((s: any) => s.indicator_id === indId)
-              if (subAggExists) indWeight = 100
+              if (subIndicatorHasRowsSet.has(indId)) indWeight = 100
             }
 
             if (isWeightedCategory) {
@@ -1256,8 +1282,32 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     console.warn(`[Report] WARNING: Skipped ${skippedNoUnit} employees without unit data (m_units is null)`)
   }
 
+  // --- Pre-fetch doctor guarantee fees once for this period (eliminates N+1 inside unit & employee loops) ---
+  const hasAnyMedicalUnit = allEmployees.some((emp: any) => {
+    const unitData = Array.isArray(emp.m_units) ? emp.m_units[0] : emp.m_units
+    return unitData && isMedicalUnit(unitData.id, unitData.name)
+  })
+
+  const doctorGuaranteeFeeMap = new Map<string, number>()
+  let precomputedTotalGuaranteeFee = 0
+  if (hasAnyMedicalUnit) {
+    const { data: masterDocs } = await supabase
+      .from('remunerasi_master_dokter')
+      .select('employee_id, pagu_guarantee_fee')
+      .eq('periode_id', period)
+
+    for (const d of masterDocs || []) {
+      const fee = Number(d.pagu_guarantee_fee || 0)
+      precomputedTotalGuaranteeFee += fee
+      if (d.employee_id) {
+        doctorGuaranteeFeeMap.set(d.employee_id, fee)
+      }
+    }
+  }
+
   // --- Calculate PIR per unit and save audit trail ---
   const unitPIRMap = new Map<string, number>()
+  const pirHistoryTasks: Promise<any>[] = []
 
   for (const emp of allEmployees) {
     if (!emp.m_units) continue
@@ -1284,12 +1334,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
     if (isMedical) {
       // MEDIS Style PIR Calculation: (Allocated - Aggregate Guarantee Fees - Total Activity Value) / Total Index Points
-      const { data: masterDocs } = await supabase
-        .from('remunerasi_master_dokter')
-        .select('pagu_guarantee_fee')
-        .eq('periode_id', period)
-
-      const totalGuaranteeFee = masterDocs?.reduce((acc: number, d: any) => acc + Number(d.pagu_guarantee_fee || 0), 0) || 0
+      const totalGuaranteeFee = precomputedTotalGuaranteeFee
       const sisaPaguMedis = allocatedForUnit - totalGuaranteeFee - totalActivityValueUnit
 
       pir = (totalSkorUnit > 0 && sisaPaguMedis > 0) ? (sisaPaguMedis / totalSkorUnit) : 0
@@ -1298,20 +1343,22 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
       // PIR = (AllocatedForUnit - TotalActivityValueUnit) / TotalSkorUnit
       const remainingPool = allocatedForUnit - totalActivityValueUnit;
       pir = (totalSkorUnit > 0) ? (remainingPool / totalSkorUnit) : 0;
-      // Allow slightly negative PIR if activities exceed allocation? Business logic check:
       if (pir < 0) pir = 0;
     }
 
     unitPIRMap.set(uId, pir)
 
-    // Save audit trail (using original field names)
-    // Note: pir_value reflects the merit indices value, 
-    // allocated_for_unit is the RAW fund before deduction (to follow history pattern)
-    await savePIRHistory(
-      supabase, period, uId, unitName,
-      netPool, unitProp, allocatedForUnit,
-      totalSkorUnit, pir, empCount
+    pirHistoryTasks.push(
+      savePIRHistory(
+        supabase, period, uId, unitName,
+        netPool, unitProp, allocatedForUnit,
+        totalSkorUnit, pir, empCount
+      )
     )
+  }
+
+  if (pirHistoryTasks.length > 0) {
+    await Promise.all(pirHistoryTasks)
   }
 
   // --- Pre-compute unit total deductions and redistribution per unit ---
@@ -1368,7 +1415,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     // If they were in empIds and we fetched something (main or sub), they should be here.
     // We already filtered allEmployees down to reportEmployeeIds.
     // JUST check if they have at least one record in assessmentDetails OR if they were part of the assessments fetch.
-    const hasAnyAssessment = assessmentDetails.length > 0 || allAssessments.some(a => a.employee_id === empId) || subAssessments.some(s => s.employee_id === empId);
+    const hasAnyAssessment = assessmentDetails.length > 0 || empAssessmentsMap.has(empId) || empHasSubSet.has(empId);
 
     if (!hasAnyAssessment) continue
 
@@ -1396,15 +1443,7 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
 
     let guaranteeFee = 0
     if (isMedical) {
-      // For doctors, guarantee fee can be added if configured
-      const { data: doctorMaster } = await supabase
-        .from('remunerasi_master_dokter')
-        .select('pagu_guarantee_fee')
-        .eq('employee_id', empId)
-        .eq('periode_id', period)
-        .maybeSingle()
-
-      guaranteeFee = Number(doctorMaster?.pagu_guarantee_fee || 0)
+      guaranteeFee = doctorGuaranteeFeeMap.get(empId) || 0
       grossIncentiveBeforeDeduction += guaranteeFee
     }
 
@@ -1429,12 +1468,12 @@ export async function generateIncentiveReport(supabase: any, period: string, uni
     const mappedBankAccount = emp.bank_account_number || emp.BANK_ACCOUNT_NUMBER || emp.nomor_rekening || '-'
     const mappedBankHolder = emp.bank_account_name || emp.BANK_ACCOUNT_NAME || emp.bank_account_holder || emp.full_name || '-'
 
-    // Extract category weights from assessmentDetails
+    // Extract category weights from assessmentDetails (O(1) via pre-indexed empAssessmentsMap)
+    const empAssList = empAssessmentsMap.get(empId)
     const getCatWeight = (cat: string) => {
       const detail = assessmentDetails.find((d: any) => d.category === cat)
       if (!detail) return 0
-      // Get from the category metadata in allAssessments
-      const catAss = allAssessments?.find((a: any) => a.employee_id === empId && a.m_kpi_indicators?.m_kpi_categories?.category === cat)
+      const catAss = empAssList?.find((a: any) => a.m_kpi_indicators?.m_kpi_categories?.category === cat)
       return parseFloat(catAss?.m_kpi_indicators?.m_kpi_categories?.weight_percentage) || 0
     }
 

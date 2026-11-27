@@ -52,7 +52,48 @@ export interface KPIDistribution {
   color: string
 }
 
+// Short-lived in-flight & result caches to deduplicate concurrent Dashboard RSC queries
+const resolvedPeriodCache = new Map<string, { expires: number; promise: Promise<string[]> }>()
+const periodScoresCache = new Map<string, { expires: number; promise: Promise<any[]> }>()
+const SHORT_CACHE_TTL_MS = 10_000
+
 export class DashboardService {
+  private static fetchScoresForPeriods(supabase: SupabaseClient, resolvedPeriods: string[], unitId?: string): Promise<any[]> {
+    const cacheKey = `${resolvedPeriods.join(',')}|${unitId || 'all'}`
+    const now = Date.now()
+    const cached = periodScoresCache.get(cacheKey)
+    if (cached && cached.expires > now) {
+      return cached.promise
+    }
+
+    const promise = (async () => {
+      let query = supabase
+        .from('t_individual_scores')
+        .select(`
+          employee_id,
+          p1_score, p2_score, p3_score, individual_total_score,
+          employee:m_employees!t_individual_scores_employee_id_fkey!inner (
+            id, full_name, is_active, role, unit_id,
+            m_units!m_employees_unit_id_fkey ( name )
+          )
+        `)
+        .in('period', resolvedPeriods)
+        .eq('employee.is_active', true)
+        .neq('employee.role', 'superadmin')
+
+      if (unitId && unitId !== 'all') {
+        query = query.eq('employee.unit_id', unitId)
+      }
+
+      const { data, error } = await query
+      if (error) throw error
+      return data || []
+    })()
+
+    periodScoresCache.set(cacheKey, { expires: now + SHORT_CACHE_TTL_MS, promise })
+    promise.catch(() => periodScoresCache.delete(cacheKey))
+    return promise
+  }
   /**
    * Helper to sanitize KPI total score if priority rupiah was legacy-stored into index score
    */
@@ -72,45 +113,41 @@ export class DashboardService {
    * Helper to parse and resolve period strings
    */
   private static async getResolvedPeriods(supabase: SupabaseClient, period?: string, year?: string): Promise<string[]> {
+    const cacheKey = `${period || 'default'}|${year || 'default'}`
+    const now = Date.now()
+    const cached = resolvedPeriodCache.get(cacheKey)
+    if (cached && cached.expires > now) {
+      return cached.promise
+    }
+
+    const promise = this._resolvePeriodsImpl(supabase, period, year)
+    resolvedPeriodCache.set(cacheKey, { expires: now + SHORT_CACHE_TTL_MS, promise })
+    promise.catch(() => resolvedPeriodCache.delete(cacheKey))
+    return promise
+  }
+
+  private static async _resolvePeriodsImpl(supabase: SupabaseClient, period?: string, year?: string): Promise<string[]> {
     const currentYear = year || new Date().getFullYear().toString()
 
     if (!period || period === 'month' || period === 'all') {
       const current = new Date()
       const currentPeriod = `${currentYear}-${String(current.getMonth() + 1).padStart(2, '0')}`
 
-      // Check if data exists in t_individual_scores for current period
-      const { count: indCount } = await supabase
-        .from('t_individual_scores')
-        .select('id', { count: 'exact', head: true })
-        .eq('period', currentPeriod)
+      // Check current period existence in parallel
+      const [{ count: indCount }, { count: assCount }] = await Promise.all([
+        supabase.from('t_individual_scores').select('id', { count: 'exact', head: true }).eq('period', currentPeriod),
+        supabase.from('t_kpi_assessments').select('id', { count: 'exact', head: true }).eq('period', currentPeriod),
+      ])
 
-      if (indCount && indCount > 0) return [currentPeriod]
+      if ((indCount && indCount > 0) || (assCount && assCount > 0)) return [currentPeriod]
 
-      // Check t_kpi_assessments
-      const { count: assCount } = await supabase
-        .from('t_kpi_assessments')
-        .select('id', { count: 'exact', head: true })
-        .eq('period', currentPeriod)
-
-      if (assCount && assCount > 0) return [currentPeriod]
-
-      // Fall back to latest available period in t_individual_scores or t_kpi_assessments
-      const { data: latestInd } = await supabase
-        .from('t_individual_scores')
-        .select('period')
-        .like('period', `${currentYear}-%`)
-        .order('period', { ascending: false })
-        .limit(1)
+      // Fall back to latest available period in parallel
+      const [{ data: latestInd }, { data: latestAss }] = await Promise.all([
+        supabase.from('t_individual_scores').select('period').like('period', `${currentYear}-%`).order('period', { ascending: false }).limit(1),
+        supabase.from('t_kpi_assessments').select('period').like('period', `${currentYear}-%`).order('period', { ascending: false }).limit(1),
+      ])
 
       if (latestInd && latestInd.length > 0) return [latestInd[0].period]
-
-      const { data: latestAss } = await supabase
-        .from('t_kpi_assessments')
-        .select('period')
-        .like('period', `${currentYear}-%`)
-        .order('period', { ascending: false })
-        .limit(1)
-
       if (latestAss && latestAss.length > 0) return [latestAss[0].period]
 
       return [currentPeriod]
@@ -178,10 +215,10 @@ export class DashboardService {
     try {
       const resolvedPeriods = await this.getResolvedPeriods(supabase, period, year)
 
-      // 1. Get total display employees
+      // Run employee count, unit count, and shared score query in parallel
       let empQuery = supabase
         .from('m_employees')
-        .select('id, unit_id', { count: 'exact' })
+        .select('id', { count: 'exact' })
         .eq('is_active', true)
         .neq('role', 'superadmin')
 
@@ -189,24 +226,20 @@ export class DashboardService {
         empQuery = empQuery.eq('unit_id', unitId)
       }
 
-      const { data: allEmployees, count: totalDisplayEmployees } = await empQuery
+      const [
+        { data: allEmployees, count: totalDisplayEmployees },
+        { count: totalUnitsCount },
+        indScores,
+      ] = await Promise.all([
+        empQuery,
+        (unitId && unitId !== 'all')
+          ? Promise.resolve({ count: 1 })
+          : supabase.from('m_units').select('id', { count: 'exact', head: true }).eq('is_active', true).neq('code', 'ADMIN'),
+        this.fetchScoresForPeriods(supabase, resolvedPeriods, unitId),
+      ])
+
       const empIds = (allEmployees || []).map(e => e.id)
-
-      // 2. Get total units
-      const { count: totalUnitsCount } = await supabase
-        .from('m_units')
-        .select('id', { count: 'exact', head: true })
-        .eq('is_active', true)
-        .neq('code', 'ADMIN')
-
       const totalUnits = (unitId && unitId !== 'all') ? 1 : (totalUnitsCount || 0)
-
-      // 3. Query t_individual_scores for calculation results
-      const { data: indScores } = await supabase
-        .from('t_individual_scores')
-        .select('employee_id, p1_score, p2_score, p3_score, individual_total_score')
-        .in('period', resolvedPeriods)
-        .in('employee_id', empIds.length > 0 ? empIds : ['00000000-0000-0000-0000-000000000000'])
 
       if (indScores && indScores.length > 0) {
         const uniqueEmps = new Set(indScores.map(s => s.employee_id))
@@ -252,27 +285,7 @@ export class DashboardService {
 
     try {
       const resolvedPeriods = await this.getResolvedPeriods(supabase, period, year)
-
-      let query = supabase
-        .from('t_individual_scores')
-        .select(`
-          employee_id,
-          p1_score, p2_score, p3_score, individual_total_score,
-          employee:m_employees!t_individual_scores_employee_id_fkey!inner (
-            id, full_name, is_active, role, unit_id,
-            m_units!m_employees_unit_id_fkey ( name )
-          )
-        `)
-        .in('period', resolvedPeriods)
-        .eq('employee.is_active', true)
-        .neq('employee.role', 'superadmin')
-
-      if (unitId && unitId !== 'all') {
-        query = query.eq('employee.unit_id', unitId)
-      }
-
-      const { data: scores, error } = await query
-      if (error) throw error
+      const scores = await this.fetchScoresForPeriods(supabase, resolvedPeriods, unitId)
 
       const empScoresMap = new Map<string, { id: string; name: string; unit: string; score: number }>()
 
@@ -308,27 +321,7 @@ export class DashboardService {
 
     try {
       const resolvedPeriods = await this.getResolvedPeriods(supabase, period, year)
-
-      let query = supabase
-        .from('t_individual_scores')
-        .select(`
-          employee_id,
-          p1_score, p2_score, p3_score, individual_total_score,
-          employee:m_employees!t_individual_scores_employee_id_fkey!inner (
-            id, full_name, is_active, role, unit_id,
-            m_units!m_employees_unit_id_fkey ( name )
-          )
-        `)
-        .in('period', resolvedPeriods)
-        .eq('employee.is_active', true)
-        .neq('employee.role', 'superadmin')
-
-      if (unitId && unitId !== 'all') {
-        query = query.eq('employee.unit_id', unitId)
-      }
-
-      const { data: scores, error } = await query
-      if (error) throw error
+      const scores = await this.fetchScoresForPeriods(supabase, resolvedPeriods, unitId)
 
       const empScoresMap = new Map<string, { id: string; name: string; unit: string; score: number }>()
 
@@ -516,22 +509,7 @@ export class DashboardService {
 
     try {
       const resolvedPeriods = await this.getResolvedPeriods(supabase, period, year)
-
-      let query = supabase
-        .from('t_individual_scores')
-        .select(`
-          p1_score, p2_score, p3_score, individual_total_score,
-          employee:m_employees!t_individual_scores_employee_id_fkey!inner ( is_active, role, unit_id )
-        `)
-        .in('period', resolvedPeriods)
-        .eq('employee.is_active', true)
-        .neq('employee.role', 'superadmin')
-
-      if (unitId && unitId !== 'all') {
-        query = query.eq('employee.unit_id', unitId)
-      }
-
-      const { data: scores } = await query
+      const scores = await this.fetchScoresForPeriods(supabase, resolvedPeriods, unitId)
 
       if (!scores || scores.length === 0) {
         return [

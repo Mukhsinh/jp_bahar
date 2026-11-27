@@ -10,6 +10,24 @@ const nextConfig = {
   // External packages for server (skip bundling heavy libraries in server chunks)
   serverExternalPackages: ['xlsx', 'jspdf', 'jspdf-autotable', 'canvg'],
 
+  // Skip tracing heavy packages and non-app directories during `Collecting build traces`
+  outputFileTracingExcludes: {
+    '*': [
+      './node_modules/xlsx/**/*',
+      './node_modules/jspdf/**/*',
+      './node_modules/jspdf-autotable/**/*',
+      './node_modules/canvg/**/*',
+      './node_modules/@swc/core*/**/*',
+      './node_modules/esbuild/**/*',
+      './node_modules/typescript/**/*',
+      './ARCHIVE_SCRIPTS/**/*',
+      './materi KPI/**/*',
+      './tmp/**/*',
+      './tests/**/*',
+      './test-output/**/*',
+    ],
+  },
+
   // Enable compression
   compress: true,
 
@@ -17,6 +35,7 @@ const nextConfig = {
   experimental: {
     // Drastically reduce peak RAM usage during `next build` (Next.js 15)
     webpackMemoryOptimizations: true,
+    serverSourceMaps: false,
     // Limit build workers to prevent multi-process RAM spikes on VPS/aaPanel
     workerThreads: false,
     cpus: Number(process.env.NEXT_BUILD_CPUS || 1),

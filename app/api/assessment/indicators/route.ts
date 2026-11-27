@@ -80,23 +80,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Authorization check for unit managers
-    if (currentEmployee.role === 'unit_manager') {
-      const { data: targetEmployee } = await adminClient
-        .from('m_employees')
-        .select('unit_id')
-        .eq('id', employeeId)
-        .single()
-
-      if (!targetEmployee || targetEmployee.unit_id !== currentEmployee.unit_id) {
-        return NextResponse.json(
-          { error: 'You can only view indicators for employees in your unit' },
-          { status: 403 }
-        )
-      }
-    }
-
-    // Get employee's unit
+    // Single lookup for target employee's unit (used for both unit_manager RBAC and category lookup)
     const { data: employee, error: employeeError } = await adminClient
       .from('m_employees')
       .select('unit_id')
@@ -108,36 +92,46 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
     }
 
-    console.log('[indicators] employee unit_id:', employee.unit_id)
+    if (currentEmployee.role === 'unit_manager' && employee.unit_id !== currentEmployee.unit_id) {
+      return NextResponse.json(
+        { error: 'You can only view indicators for employees in your unit' },
+        { status: 403 }
+      )
+    }
 
-    // Check unit's KPI schema mode
-    const { data: unitData } = await adminClient
-      .from('m_units')
-      .select('kpi_schema_mode')
-      .eq('id', employee.unit_id)
-      .single()
+    // Fetch unit schema mode, unit categories, and existing assessments in parallel
+    let assessmentsQuery = adminClient
+      .from('t_kpi_assessments')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .eq('period', period)
+
+    if (revenueType) {
+      assessmentsQuery = assessmentsQuery.or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
+    }
+
+    const [
+      { data: unitData },
+      { data: unitCategories },
+      { data: existingAssessments, error: assessmentsError },
+    ] = await Promise.all([
+      adminClient.from('m_units').select('kpi_schema_mode').eq('id', employee.unit_id).single(),
+      adminClient
+        .from('m_kpi_categories')
+        .select('id, category_name, category, weight_percentage, unit_id, configuration_style, is_weighted, revenue_type')
+        .eq('is_active', true)
+        .eq('unit_id', employee.unit_id),
+      assessmentsQuery.order('created_at'),
+    ])
 
     const isDifferentKPISchema = unitData?.kpi_schema_mode === 'different'
 
-    // Get ALL categories
-    const { data: allCategories, error: allCatError } = await adminClient
-      .from('m_kpi_categories')
-      .select('id, category_name, category, weight_percentage, unit_id, configuration_style, is_weighted, revenue_type')
-      .eq('is_active', true)
-
-    console.log('[indicators] allCategories count:', allCategories?.length, 'error:', allCatError?.message)
-
-    // Filter categories by unit and revenue_type if unit uses different KPI schema
-    let categories = (allCategories || []).filter(c => {
-      if (c.unit_id !== employee.unit_id) return false
+    let categories = (unitCategories || []).filter(c => {
       if (isDifferentKPISchema) {
         return c.revenue_type === revenueType || c.revenue_type === 'all' || !c.revenue_type
       }
-      // If same KPI schema, take categories regardless of whether revenue_type is bpjs, umum, all or null
       return c.revenue_type === 'bpjs' || c.revenue_type === 'umum' || c.revenue_type === 'all' || !c.revenue_type
     })
-
-    console.log('[indicators] filtered categories for unit:', categories.length)
 
     // If no categories in employee's unit, return empty but with helpful message
     if (categories.length === 0) {
@@ -220,19 +214,6 @@ export async function GET(request: NextRequest) {
       })
 
     })
-
-    // Get existing assessments
-    let assessmentsQuery = adminClient
-      .from('t_kpi_assessments')
-      .select('*')
-      .eq('employee_id', employeeId)
-      .eq('period', period)
-
-    if (revenueType) {
-      assessmentsQuery = assessmentsQuery.or(`revenue_type.eq.${revenueType},revenue_type.is.null`)
-    }
-
-    const { data: existingAssessments, error: assessmentsError } = await assessmentsQuery.order('created_at')
 
     if (assessmentsError) {
       console.error('[indicators] assessments query error:', assessmentsError)

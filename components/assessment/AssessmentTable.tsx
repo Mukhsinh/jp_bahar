@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Table,
   TableBody,
@@ -42,6 +42,19 @@ export default function AssessmentTable({
 }: AssessmentTableProps) {
   const [selectedEmployee, setSelectedEmployee] = useState<AssessmentStatus | null>(null)
   const [showAssessmentDialog, setShowAssessmentDialog] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const pageSize = 25
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [employees.length, period, revenueType])
+
+  const totalPages = Math.max(1, Math.ceil(employees.length / pageSize))
+  const safePage = Math.min(currentPage, totalPages)
+  const paginatedEmployees = useMemo(() => {
+    const start = (safePage - 1) * pageSize
+    return employees.slice(start, start + pageSize)
+  }, [employees, safePage])
 
   const handleAssess = (employee: AssessmentStatus) => {
     setSelectedEmployee(employee)
@@ -147,7 +160,7 @@ export default function AssessmentTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {employees.map((employee) => (
+            {paginatedEmployees.map((employee) => (
               <TableRow key={employee.employee_id}>
                 <TableCell>
                   <div className="flex items-center gap-3">
@@ -225,6 +238,35 @@ export default function AssessmentTable({
           </TableBody>
         </Table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4">
+          <p className="text-xs text-gray-500">
+            Menampilkan {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, employees.length)} dari {employees.length} pegawai
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={safePage === 1}
+            >
+              Sebelumnya
+            </Button>
+            <span className="text-xs font-semibold px-2.5 py-1 bg-gray-100 rounded-md">
+              {safePage} / {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={safePage === totalPages}
+            >
+              Selanjutnya
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Assessment Dialog */}
       {selectedEmployee && (

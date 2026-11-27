@@ -5,11 +5,16 @@ import { createClient } from '@/lib/supabase/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Plus, BookOpen } from 'lucide-react'
+import dynamic from 'next/dynamic'
 import PoolTable from '@/components/pool/PoolTable'
-import PoolFormDialog from '@/components/pool/PoolFormDialog'
-import PoolDetailsDialog from '@/components/pool/PoolDetailsDialog'
-import PoolCharts from '@/components/pool/PoolCharts'
 import { isSuperAdmin, isUnitManager } from '@/lib/auth-utils'
+
+const PoolFormDialog = dynamic(() => import('@/components/pool/PoolFormDialog'), { ssr: false })
+const PoolDetailsDialog = dynamic(() => import('@/components/pool/PoolDetailsDialog'), { ssr: false })
+const PoolCharts = dynamic(() => import('@/components/pool/PoolCharts'), {
+  ssr: false,
+  loading: () => <div className="h-64 w-full bg-slate-100 animate-pulse rounded-2xl" />
+})
 
 interface Pool {
   id: string
