@@ -71,6 +71,25 @@ function shouldCleanup(): boolean {
   return false
 }
 
+const isDev = process.env.NODE_ENV !== 'production'
+
+/**
+ * Build redirect URL safely behind reverse proxies (e.g. aaPanel Nginx).
+ * Prevents redirecting to internal 127.0.0.1 / 0.0.0.0 / localhost addresses.
+ */
+function buildRedirectUrl(request: NextRequest, path: string): URL {
+  const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim()
+  const host = forwardedHost || request.headers.get('host')
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
+
+  if (host) {
+    const proto = forwardedProto || request.nextUrl.protocol.replace(':', '') || 'http'
+    return new URL(path, `${proto}://${host}`)
+  }
+
+  return new URL(path, request.url)
+}
+
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
@@ -92,7 +111,9 @@ export async function middleware(request: NextRequest) {
       return response
     }
 
-    console.log('[MIDDLEWARE] Path:', pathname, '| Cookies present:', request.cookies.getAll().map(c => c.name))
+    if (isDev) {
+      console.log('[MIDDLEWARE] Path:', pathname, '| Cookies present:', request.cookies.getAll().map(c => c.name))
+    }
 
     // Background cleanup (only occasionally)
     if (shouldCleanup()) {
@@ -139,14 +160,16 @@ export async function middleware(request: NextRequest) {
     }
 
     const session = user ? { user } : null
-    console.log('[MIDDLEWARE] Path:', pathname, '| Session User:', user?.email || 'NONE', '| UserError:', userError?.message || 'NONE')
+    if (isDev) {
+      console.log('[MIDDLEWARE] Path:', pathname, '| Session User:', user?.email || 'NONE', '| UserError:', userError?.message || 'NONE')
+    }
 
 
     // 2. Check if public route (login, reset-password, forbidden)
     if (isPublicRoute(pathname)) {
       // If user is already authenticated and visits /login, redirect to /dashboard
       if (session && pathname === '/login') {
-        const dashboardUrl = new URL('/dashboard', request.url)
+        const dashboardUrl = buildRedirectUrl(request, '/dashboard')
         return NextResponse.redirect(dashboardUrl)
       }
       return response
@@ -156,7 +179,7 @@ export async function middleware(request: NextRequest) {
     if (isLegacyRoute(pathname)) {
       const newPath = getLegacyRedirectPath(pathname)
       if (newPath) {
-        const url = new URL(newPath, request.url)
+        const url = buildRedirectUrl(request, newPath)
         url.search = request.nextUrl.search
         return NextResponse.redirect(url, 301)
       }
@@ -171,7 +194,7 @@ export async function middleware(request: NextRequest) {
 
       // Only redirect to login if not already on login page
       if (pathname !== '/login') {
-        const loginUrl = new URL('/login', request.url)
+        const loginUrl = buildRedirectUrl(request, '/login')
         const redirectResponse = NextResponse.redirect(loginUrl)
 
         // Clear auth cookies
@@ -242,7 +265,7 @@ export async function middleware(request: NextRequest) {
           if (pathname.startsWith('/api/')) {
             return NextResponse.json({ error: 'User record not found' }, { status: 404 })
           }
-          const loginUrl = new URL('/login', request.url)
+          const loginUrl = buildRedirectUrl(request, '/login')
           loginUrl.searchParams.set('error', 'user_not_found')
           return NextResponse.redirect(loginUrl)
         }
@@ -260,7 +283,7 @@ export async function middleware(request: NextRequest) {
       if (pathname.startsWith('/api/')) {
         return NextResponse.json({ error: 'Account inactive or not found' }, { status: 403 })
       }
-      const loginUrl = new URL('/login', request.url)
+      const loginUrl = buildRedirectUrl(request, '/login')
       loginUrl.searchParams.set('error', 'inactive')
 
       const redirectResponse = NextResponse.redirect(loginUrl)
@@ -275,7 +298,7 @@ export async function middleware(request: NextRequest) {
     // 7. Check route authorization
     // Superadmins can bypass route checks (they have full access)
     if (employeeData && employeeData.role !== 'superadmin' && !pathname.startsWith('/api/') && !isRouteAllowed(pathname, employeeData.role)) {
-      const forbiddenUrl = new URL('/forbidden', request.url)
+      const forbiddenUrl = buildRedirectUrl(request, '/forbidden')
       return NextResponse.redirect(forbiddenUrl)
     }
 
@@ -299,7 +322,7 @@ export async function middleware(request: NextRequest) {
     }
 
     // On any error for protected routes, redirect to login and clear cookies
-    const loginUrl = new URL('/login', request.url)
+    const loginUrl = buildRedirectUrl(request, '/login')
     const redirectResponse = NextResponse.redirect(loginUrl)
     const cookiesToClear = ['sb-access-token', 'sb-refresh-token', 'supabase-auth-token', 'sb-auth-token']
     cookiesToClear.forEach(cookieName => {

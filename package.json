@@ -2,6 +2,9 @@
   "name": "jaspel-kpi-system",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "next dev -p 3002",
     "dev:turbo": "set NODE_OPTIONS=--max-old-space-size=4096 && next dev -p 3002 --turbo",
@@ -9,7 +12,8 @@
     "build": "next build",
     "build:analyze": "ANALYZE=true next build",
     "build:optimized": "tsx scripts/optimize-build.ts",
-    "start": "next start -p 3002",
+    "start": "node server-start.js",
+    "start:next": "next start -H 0.0.0.0 -p 3002",
     "start:prod": "npm run build && npm run start",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
