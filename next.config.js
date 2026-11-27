@@ -7,20 +7,34 @@ const nextConfig = {
   // Hide X-Powered-By header in self-hosted environments (aaPanel/Nginx)
   poweredByHeader: false,
 
-  // External packages for server
-  serverExternalPackages: ['xlsx'],
+  // External packages for server (skip bundling heavy libraries in server chunks)
+  serverExternalPackages: ['xlsx', 'jspdf', 'jspdf-autotable', 'canvg'],
 
   // Enable compression
   compress: true,
 
   // Experimental features
   experimental: {
+    // Drastically reduce peak RAM usage during `next build` (Next.js 15)
+    webpackMemoryOptimizations: true,
+    // Limit build workers to prevent multi-process RAM spikes on VPS/aaPanel
+    workerThreads: false,
+    cpus: Number(process.env.NEXT_BUILD_CPUS || 1),
     serverActions: {
       bodySizeLimit: '10mb',
       ...(allowedOrigins && allowedOrigins.length > 0 ? { allowedOrigins } : {}),
     },
-    // Optimize package imports — tree-shake heavy icon libraries
-    optimizePackageImports: ['lucide-react', '@radix-ui/react-icons'],
+    // Optimize package imports — tree-shake heavy libraries
+    optimizePackageImports: [
+      'lucide-react',
+      'recharts',
+      'date-fns',
+      '@radix-ui/react-icons',
+      '@radix-ui/react-dialog',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-select',
+      '@radix-ui/react-tabs',
+    ],
   },
 
   // Skip build checks for faster deploys
@@ -71,8 +85,14 @@ const nextConfig = {
     ]
   },
 
-  // Webpack config — server-side shims only
-  webpack: (config, { isServer }) => {
+  // Webpack config — server-side shims & production memory optimization
+  webpack: (config, { isServer, dev }) => {
+    // Disable PackFileCacheStrategy in production builds to avoid high RAM
+    // spikes during serialization (and removes "Serializing big strings" warnings)
+    if (!dev) {
+      config.cache = false
+    }
+
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
