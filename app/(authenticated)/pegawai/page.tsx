@@ -33,8 +33,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import dynamic from 'next/dynamic'
 import { PegawaiTable } from '@/components/pegawai/PegawaiTable'
-import { PegawaiFormDialog } from '@/components/pegawai/PegawaiFormDialog'
 import { LoadingSpinner } from '@/components/ui/loading-spinner'
 import type { Pegawai } from '@/lib/types/database.types'
 import { useRouter } from 'next/navigation'
@@ -55,17 +55,23 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-  Legend
-} from 'recharts'
+
+const PegawaiFormDialog = dynamic(
+  () => import('@/components/pegawai/PegawaiFormDialog').then((mod) => mod.PegawaiFormDialog),
+  { ssr: false }
+)
+
+const PegawaiUnitChart = dynamic(
+  () => import('@/components/pegawai/PegawaiUnitChart').then((mod) => mod.PegawaiUnitChart),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full w-full bg-gray-50 animate-pulse rounded-lg flex items-center justify-center">
+        <LoadingSpinner />
+      </div>
+    ),
+  }
+)
 
 // Debounce hook for search optimization
 function useDebounce<T>(value: T, delay: number): T {
@@ -605,28 +611,7 @@ export default function PegawaiPage() {
                 <LoadingSpinner />
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats?.byUnit.slice(0, 15)} margin={{ top: 20, right: 30, left: 0, bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis
-                    dataKey="name"
-                    angle={-45}
-                    textAnchor="end"
-                    interval={0}
-                    height={80}
-                    tick={{ fontSize: 10, fill: '#64748b' }}
-                  />
-                  <YAxis tick={{ fontSize: 12, fill: '#64748b' }} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                    {stats?.byUnit.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} fillOpacity={0.8} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <PegawaiUnitChart data={stats?.byUnit || []} />
             )}
           </CardContent>
         </Card>
@@ -765,12 +750,14 @@ export default function PegawaiPage() {
         </CardContent>
       </Card>
 
-      <PegawaiFormDialog
-        open={showCreateDialog}
-        onClose={handleCloseDialog}
-        onSuccess={handleSuccess}
-        pegawai={selectedPegawai}
-      />
+      {showCreateDialog && (
+        <PegawaiFormDialog
+          open={showCreateDialog}
+          onClose={handleCloseDialog}
+          onSuccess={handleSuccess}
+          pegawai={selectedPegawai}
+        />
+      )}
     </div>
   )
 }

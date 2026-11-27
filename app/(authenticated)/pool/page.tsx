@@ -53,8 +53,21 @@ export default function PoolManagementPage() {
     try {
       const supabase = createClient()
 
-      // Fetch user role
-      const { data: { user } } = await supabase.auth.getUser()
+      // Fetch user session (fast local check) and pools in parallel
+      const [sessionRes, poolsRes] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase
+          .from('t_pool')
+          .select('*')
+          .order('period', { ascending: false }),
+      ])
+
+      let user: any = sessionRes.data.session?.user
+      if (!user) {
+        const { data: userData } = await supabase.auth.getUser()
+        user = userData.user
+      }
+
       if (user) {
         if (isSuperAdmin(user as any)) {
           setUserRole('superadmin')
@@ -74,10 +87,7 @@ export default function PoolManagementPage() {
         }
       }
 
-      const { data, error } = await supabase
-        .from('t_pool')
-        .select('*')
-        .order('period', { ascending: false })
+      const { data, error } = poolsRes
 
       if (error) throw error
       setPools(data || [])
@@ -268,19 +278,23 @@ export default function PoolManagementPage() {
         </CardContent>
       </Card>
 
-      <PoolFormDialog
-        open={isFormDialogOpen}
-        onOpenChange={setIsFormDialogOpen}
-        onSuccess={loadPools}
-      />
+      {isFormDialogOpen && (
+        <PoolFormDialog
+          open={isFormDialogOpen}
+          onOpenChange={setIsFormDialogOpen}
+          onSuccess={loadPools}
+        />
+      )}
 
-      <PoolDetailsDialog
-        open={isDetailsDialogOpen}
-        onOpenChange={setIsDetailsDialogOpen}
-        pool={selectedPool}
-        onUpdate={loadPools}
-        userRole={userRole}
-      />
+      {isDetailsDialogOpen && (
+        <PoolDetailsDialog
+          open={isDetailsDialogOpen}
+          onOpenChange={setIsDetailsDialogOpen}
+          pool={selectedPool}
+          onUpdate={loadPools}
+          userRole={userRole}
+        />
+      )}
     </div>
   )
 }

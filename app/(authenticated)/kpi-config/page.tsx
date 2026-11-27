@@ -73,7 +73,13 @@ export default function KPIConfigPage() {
     setMounted(true)
     const fetchUser = async () => {
       const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
+      // Use fast local getSession() first to avoid extra network round-trip on every navigation
+      const { data: { session } } = await supabase.auth.getSession()
+      let user: any = session?.user
+      if (!user) {
+        const { data } = await supabase.auth.getUser()
+        user = data.user
+      }
       if (user) {
         const authRole = user.app_metadata?.role || user.user_metadata?.role
         const isSuperAdmin = authRole === 'superadmin' || user.email === 'admin@sungaibahar.com'
@@ -96,11 +102,14 @@ export default function KPIConfigPage() {
       const filteredUnits = result.data || []
 
       setUnits(filteredUnits)
-      if (filteredUnits.length > 0 && (!selectedUnit || !filteredUnits.find(u => u.id === selectedUnit))) {
-        setSelectedUnit(filteredUnits[0].id)
-        const initialMode = (filteredUnits[0].kpi_schema_mode as any) === 'different' ? 'different' : 'same'
-        setKpiSchemaMode(initialMode)
-        setSavedKpiSchemaMode(initialMode)
+      if (filteredUnits.length > 0) {
+        setSelectedUnit((prev) => {
+          if (prev && filteredUnits.find((u) => u.id === prev)) return prev
+          const initialMode = (filteredUnits[0].kpi_schema_mode as any) === 'different' ? 'different' : 'same'
+          setKpiSchemaMode(initialMode)
+          setSavedKpiSchemaMode(initialMode)
+          return filteredUnits[0].id
+        })
       }
     } catch (error: any) {
       console.error('Error loading units:', error)
@@ -108,7 +117,7 @@ export default function KPIConfigPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedUnit])
+  }, [])
 
   useEffect(() => {
     if (selectedUnitData) {
@@ -157,7 +166,7 @@ export default function KPIConfigPage() {
   }
 
   useEffect(() => {
-    if (!mounted || userMetadata === null) return
+    if (!mounted) return
 
     setError(null)
     loadUnits().catch((err) => {
@@ -165,7 +174,7 @@ export default function KPIConfigPage() {
       setError('Gagal memuat data unit. Silakan refresh halaman.')
       setIsLoading(false)
     })
-  }, [mounted, userMetadata, loadUnits])
+  }, [mounted, loadUnits])
 
   useEffect(() => {
     if (!mounted || !selectedUnit) return
@@ -632,52 +641,62 @@ export default function KPIConfigPage() {
         </Card>
       )}
 
-      {/* Dialogs */}
-      <CategoryFormDialog
-        open={isCategoryDialogOpen}
-        onOpenChange={setIsCategoryDialogOpen}
-        category={selectedCategory}
-        unitId={selectedUnit}
-        existingCategories={categories}
-        onSuccess={loadKPIStructure}
-        revenueType={kpiSchemaMode === 'different' ? activeRevenueType : 'bpjs'}
-      />
+      {/* Dialogs — conditionally mounted so dynamic chunks only load when opened */}
+      {isCategoryDialogOpen && (
+        <CategoryFormDialog
+          open={isCategoryDialogOpen}
+          onOpenChange={setIsCategoryDialogOpen}
+          category={selectedCategory}
+          unitId={selectedUnit}
+          existingCategories={categories}
+          onSuccess={loadKPIStructure}
+          revenueType={kpiSchemaMode === 'different' ? activeRevenueType : 'bpjs'}
+        />
+      )}
 
-      <IndicatorFormDialog
-        open={isIndicatorDialogOpen}
-        onOpenChange={setIsIndicatorDialogOpen}
-        indicator={selectedIndicator}
-        category={selectedCategory}
-        existingIndicators={indicators.filter(i => i.category_id === selectedCategory?.id)}
-        onSuccess={loadKPIStructure}
-        isMedicalUnit={isMedicalUnit}
-      />
+      {isIndicatorDialogOpen && (
+        <IndicatorFormDialog
+          open={isIndicatorDialogOpen}
+          onOpenChange={setIsIndicatorDialogOpen}
+          indicator={selectedIndicator}
+          category={selectedCategory}
+          existingIndicators={indicators.filter(i => i.category_id === selectedCategory?.id)}
+          onSuccess={loadKPIStructure}
+          isMedicalUnit={isMedicalUnit}
+        />
+      )}
 
-      <SubIndicatorFormDialog
-        open={isSubIndicatorDialogOpen}
-        onOpenChange={setIsSubIndicatorDialogOpen}
-        subIndicator={selectedSubIndicator}
-        indicator={selectedIndicatorForSub}
-        existingSubIndicators={subIndicators.filter(s => s.indicator_id === selectedIndicatorForSub?.id)}
-        onSuccess={loadKPIStructure}
-        isMedicalUnit={isMedicalUnit}
-      />
+      {isSubIndicatorDialogOpen && (
+        <SubIndicatorFormDialog
+          open={isSubIndicatorDialogOpen}
+          onOpenChange={setIsSubIndicatorDialogOpen}
+          subIndicator={selectedSubIndicator}
+          indicator={selectedIndicatorForSub}
+          existingSubIndicators={subIndicators.filter(s => s.indicator_id === selectedIndicatorForSub?.id)}
+          onSuccess={loadKPIStructure}
+          isMedicalUnit={isMedicalUnit}
+        />
+      )}
 
-      <CopyStructureDialog
-        open={isCopyDialogOpen}
-        onOpenChange={setIsCopyDialogOpen}
-        units={units}
-        sourceUnitId={selectedUnit}
-        onSuccess={handleCopyComplete}
-      />
+      {isCopyDialogOpen && (
+        <CopyStructureDialog
+          open={isCopyDialogOpen}
+          onOpenChange={setIsCopyDialogOpen}
+          units={units}
+          sourceUnitId={selectedUnit}
+          onSuccess={handleCopyComplete}
+        />
+      )}
 
-      <CopyBPJSStructureDialog
-        open={isCopyBPJSDialogOpen}
-        onOpenChange={setIsCopyBPJSDialogOpen}
-        unitId={selectedUnit}
-        unitName={selectedUnitData?.name}
-        onSuccess={loadKPIStructure}
-      />
+      {isCopyBPJSDialogOpen && (
+        <CopyBPJSStructureDialog
+          open={isCopyBPJSDialogOpen}
+          onOpenChange={setIsCopyBPJSDialogOpen}
+          unitId={selectedUnit}
+          unitName={selectedUnitData?.name}
+          onSuccess={loadKPIStructure}
+        />
+      )}
     </div>
   )
 }

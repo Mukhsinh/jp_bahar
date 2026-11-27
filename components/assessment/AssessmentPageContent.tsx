@@ -815,18 +815,20 @@ export default function AssessmentPageContent({
         </TabsContent>
       </Tabs>
 
-      <AddAssessmentPeriodDialog
-        isOpen={isAddPeriodDialogOpen}
-        onClose={() => setIsAddPeriodDialogOpen(false)}
-        onSelect={(period) => {
-          if (!availablePeriods.includes(period)) {
-            const newList = [period, ...availablePeriods].sort((a, b) => b.localeCompare(a))
-            setAvailablePeriods(newList)
-          }
-          setSelectedPeriod(period)
-        }}
-        existingPeriods={availablePeriods}
-      />
+      {isAddPeriodDialogOpen && (
+        <AddAssessmentPeriodDialog
+          isOpen={isAddPeriodDialogOpen}
+          onClose={() => setIsAddPeriodDialogOpen(false)}
+          onSelect={(period) => {
+            if (!availablePeriods.includes(period)) {
+              const newList = [period, ...availablePeriods].sort((a, b) => b.localeCompare(a))
+              setAvailablePeriods(newList)
+            }
+            setSelectedPeriod(period)
+          }}
+          existingPeriods={availablePeriods}
+        />
+      )}
     </div>
   )
 }

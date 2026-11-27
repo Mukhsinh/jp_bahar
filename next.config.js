@@ -3,9 +3,19 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
   : undefined
 
+const isProd = process.env.NODE_ENV === 'production'
+const isConstrainedBuild = Boolean(process.env.NEXT_BUILD_CPUS)
+
 const nextConfig = {
   // Hide X-Powered-By header in self-hosted environments (aaPanel/Nginx)
   poweredByHeader: false,
+
+  // Keep compiled pages in memory much longer during dev so switching
+  // between the 11 sidebar routes does not evict and rebuild them
+  onDemandEntries: {
+    maxInactiveAge: 60 * 60 * 1000, // 1 hour
+    pagesBufferLength: 25,
+  },
 
   // External packages for server (skip bundling heavy libraries in server chunks)
   serverExternalPackages: ['xlsx', 'jspdf', 'jspdf-autotable', 'canvg'],
@@ -33,12 +43,16 @@ const nextConfig = {
 
   // Experimental features
   experimental: {
-    // Drastically reduce peak RAM usage during `next build` (Next.js 15)
-    webpackMemoryOptimizations: true,
-    serverSourceMaps: false,
-    // Limit build workers to prevent multi-process RAM spikes on VPS/aaPanel
-    workerThreads: false,
-    cpus: Number(process.env.NEXT_BUILD_CPUS || 1),
+    // Only apply aggressive memory/CPU limits during production or constrained VPS builds.
+    // Leaving these enabled in `next dev` causes slow single-core rebuilds and cache eviction.
+    ...(isProd ? {
+      webpackMemoryOptimizations: true,
+      serverSourceMaps: false,
+    } : {}),
+    ...(isConstrainedBuild ? {
+      workerThreads: false,
+      cpus: Number(process.env.NEXT_BUILD_CPUS),
+    } : {}),
     serverActions: {
       bodySizeLimit: '10mb',
       ...(allowedOrigins && allowedOrigins.length > 0 ? { allowedOrigins } : {}),
@@ -103,6 +117,9 @@ const nextConfig = {
       },
     ]
   },
+
+  // Turbopack config (silences Webpack-only warning when running `next dev --turbopack`)
+  turbopack: {},
 
   // Webpack config — server-side shims & production memory optimization
   webpack: (config, { isServer, dev }) => {

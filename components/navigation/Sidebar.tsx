@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { usePathname } from 'next/navigation'
 import { OptimizedLink } from '@/components/ui/optimized-link'
 import { createClient } from '@/lib/supabase/client'
@@ -215,7 +215,7 @@ const SidebarInner = React.memo(function SidebarInner({
             <OptimizedLink
               key={item.id}
               href={item.path}
-              prefetch={false}
+              prefetch={true}
               onClick={() => setIsMobileOpen(false)}
               className={cn(
                 'w-full flex items-center gap-4 px-4 py-2 rounded-xl transition-all duration-300 group hover-scale',
@@ -454,7 +454,8 @@ export default function Sidebar() {
     [pathname]
   )
 
-  const menuItems = user ? getMenuItems(user.role) : []
+  const menuItems = useMemo(() => (user ? getMenuItems(user.role) : []), [user])
+  const noop = useCallback(() => { }, [])
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -486,7 +487,7 @@ export default function Sidebar() {
         {!mounted || loading ? <SkeletonContent /> : (
           <SidebarInner
             isCollapsed={false} // Always expanded on mobile
-            setIsCollapsed={() => { }}
+            setIsCollapsed={noop}
             isMobileOpen={isMobileOpen}
             setIsMobileOpen={setIsMobileOpen}
             companyInfo={companyInfo}
@@ -514,7 +515,7 @@ export default function Sidebar() {
             isCollapsed={isCollapsed}
             setIsCollapsed={setIsCollapsed}
             isMobileOpen={false}
-            setIsMobileOpen={() => { }}
+            setIsMobileOpen={noop}
             companyInfo={companyInfo}
             user={user}
             unitName={unitName}
